@@ -799,7 +799,6 @@ int LuaApi::Rewind(lua_State *lua)
 	LuaCallHelper l(lua);
 	int seconds = l.ReadInteger();
 	checkparams();
-	checksavestateconditions();
 	errorCond(seconds <= 0, "seconds must be >= 1");
 	_emu->GetRewindManager()->RewindSeconds(seconds);
 	return l.ReturnCount();
@@ -903,7 +902,9 @@ int LuaApi::SetInput(lua_State* lua)
 			}
 		}
 	}
-	
+
+	controller->RefreshStateBuffer();
+
 	lua_pop(lua, 1);
 
 	return l.ReturnCount();
@@ -1047,7 +1048,6 @@ int LuaApi::ClearCheats(lua_State* lua)
 int LuaApi::CreateSavestate(lua_State* lua)
 {
 	LuaCallHelper l(lua);
-	checksavestateconditions();
 	stringstream ss;
 	_emu->GetSaveStateManager()->SaveState(ss);
 	l.Return(ss.str());
@@ -1059,8 +1059,7 @@ int LuaApi::LoadSavestate(lua_State* lua)
 	LuaCallHelper l(lua);
 	string savestate = l.ReadString();
 	checkparams();
-	checksavestateconditions();
-	
+
 	stringstream ss;
 	ss << savestate;
 	bool result = _emu->GetSaveStateManager()->LoadState(ss);

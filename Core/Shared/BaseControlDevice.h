@@ -29,8 +29,6 @@ protected:
 	bool _connected = true;
 	SimpleLock _stateLock;
 
-	virtual void RefreshStateBuffer() { }
-
 	void EnsureCapacity(int32_t minBitCount);
 	uint32_t GetByteIndex(uint8_t bit);
 	virtual bool HasCoordinates();
@@ -98,6 +96,8 @@ public:
 
 	virtual uint8_t ReadRam(uint16_t addr) = 0;
 	virtual void WriteRam(uint16_t addr, uint8_t value) = 0;
+
+	virtual void RefreshStateBuffer() { }
 
 	//Used by Lua API
 	virtual vector<DeviceButtonName> GetKeyNameAssociations() { return {}; }
