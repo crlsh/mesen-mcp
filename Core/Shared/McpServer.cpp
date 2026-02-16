@@ -238,6 +238,10 @@ std::shared_ptr<McpTypedCommand> McpServer::ParseCommand(const std::string& json
 	return cmd;
 }
 
+// Forward declarations
+static MemoryType GetCpuMemoryType(ConsoleType ct);
+static CpuType GetMainCpuType(ConsoleType ct);
+
 // ============================================================================
 // DrainCommandQueue — called from emulation thread (core thread)
 // ============================================================================
@@ -268,6 +272,12 @@ void McpServer::ExecutePendingIntentions()
 			std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
 			path = _coreState.pendingRomPath;
 			_coreState.pendingRomPath.clear();
+
+			// Clear memory operation state when loading new ROM (prevents stale state)
+			_coreState.pendingReadMemory = false;
+			_coreState.pendingWriteMemory = false;
+			_coreState.readReady = false;
+			_coreState.lastReadValue = 0;
 		}
 
 		// Safe to call LoadRom - we're at a safe point in the emu loop
@@ -290,6 +300,60 @@ void McpServer::ExecutePendingIntentions()
 			IConsole* console = _emu->GetConsoleUnsafe();
 			if(console) {
 				console->Reset();
+			}
+		}
+	}
+
+	// Execute read_memory intention if pending (BEFORE input)
+	if(_coreState.phase == EmuPhase::Running) {
+		bool shouldRead;
+		uint32_t address;
+		{
+			std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
+			shouldRead = _coreState.pendingReadMemory;
+			address = _coreState.readAddress;
+			_coreState.pendingReadMemory = false;  // Clear after reading
+		}
+
+		if(shouldRead) {
+			IConsole* console = _emu->GetConsoleUnsafe();
+			if(console) {
+				MemoryType memType = GetCpuMemoryType(console->GetConsoleType());
+				DebuggerRequest dbgRequest = _emu->GetDebugger(true);
+				Debugger* dbg = dbgRequest.GetDebugger();
+				if(dbg) {
+					uint8_t value = dbg->GetMemoryDumper()->GetMemoryValue(memType, address);
+
+					std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
+					_coreState.lastReadValue = value;
+					_coreState.readReady = true;  // Signal result ready
+				}
+			}
+		}
+	}
+
+	// Execute write_memory intention if pending (BEFORE input)
+	if(_coreState.phase == EmuPhase::Running) {
+		bool shouldWrite;
+		uint32_t address;
+		uint8_t value;
+		{
+			std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
+			shouldWrite = _coreState.pendingWriteMemory;
+			address = _coreState.writeAddress;
+			value = _coreState.writeValue;
+			_coreState.pendingWriteMemory = false;  // Clear after reading
+		}
+
+		if(shouldWrite) {
+			IConsole* console = _emu->GetConsoleUnsafe();
+			if(console) {
+				MemoryType memType = GetCpuMemoryType(console->GetConsoleType());
+				DebuggerRequest dbgRequest = _emu->GetDebugger(true);
+				Debugger* dbg = dbgRequest.GetDebugger();
+				if(dbg) {
+					dbg->GetMemoryDumper()->SetMemoryValue(memType, address, value);
+				}
 			}
 		}
 	}
@@ -427,53 +491,67 @@ std::string McpServer::ExecStepFrame(McpTypedCommand& cmd)
 
 std::string McpServer::ExecReadMemory(McpTypedCommand& cmd)
 {
-	if(!_emu->IsRunning()) return ErrorResponse(cmd.id, "no ROM loaded");
-	if(cmd.address < 0) return ErrorResponse(cmd.id, "invalid address");
+	// ============================================================================
+	// read_memory() → Async Intention Model
+	// ============================================================================
+	// Contract (API stable):
+	//   1. Returns {"accepted": true} immediately (no blocking)
+	//   2. Execution happens in emu thread via ExecutePendingIntentions()
+	//   3. Result delivered ONE-SHOT via get_state() → {"last_read": value}
+	//   4. Second get_state() will NOT include "last_read" (one-shot consumed)
+	//   5. Works WITHOUT stepping (single-slot: last read_memory wins)
+	//   6. ROM load clears "last_read" state (prevents cross-ROM contamination)
+	//
+	// Validation:
+	//   - Address must be 0x0000-0xFFFF (16-bit CPU bus)
+	//   - ROM-only regions, open bus validated by Mesen Debugger (GetMemoryValue)
+	// ============================================================================
 
-	MemoryType memType = GetCpuMemoryType(_emu->GetConsoleType());
-
-	DebuggerRequest dbgRequest = _emu->GetDebugger(true);
-	Debugger* dbg = dbgRequest.GetDebugger();
-	if(!dbg) return ErrorResponse(cmd.id, "debugger not available");
-
-	int size = cmd.count;
-	if(size < 1) size = 1;
-	if(size > 256) size = 256;
-
-	if(size == 1) {
-		uint8_t val = dbg->GetMemoryDumper()->GetMemoryValue(memType, (uint32_t)cmd.address);
-		return OkResponse(cmd.id, "{\"value\":" + std::to_string(val) + "}");
+	if(_coreState.phase != EmuPhase::Running) {
+		return ErrorResponse(cmd.id, "emulator not running");
 	}
 
-	// Multi-byte read
-	std::vector<uint8_t> buf(size);
-	dbg->GetMemoryDumper()->GetMemoryValues(memType, (uint32_t)cmd.address, (uint32_t)(cmd.address + size - 1), buf.data());
-
-	std::ostringstream result;
-	result << "{\"address\":" << cmd.address << ",\"size\":" << size << ",\"data\":[";
-	for(int i = 0; i < size; i++) {
-		if(i > 0) result << ",";
-		result << (int)buf[i];
+	if(cmd.address < 0 || cmd.address > 0xFFFF) {
+		return ErrorResponse(cmd.id, "invalid address");
 	}
-	result << "]}";
-	return OkResponse(cmd.id, result.str());
+
+	// Set intention - will execute in emu thread at safe point
+	{
+		std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
+		_coreState.readAddress = (uint32_t)cmd.address;
+		_coreState.pendingReadMemory = true;
+		_coreState.readReady = false;  // Clear previous result
+	}
+
+	// Return immediately - emu thread will execute and set readReady flag
+	return OkResponse(cmd.id, R"({"accepted":true})");
 }
 
 std::string McpServer::ExecWriteMemory(McpTypedCommand& cmd)
 {
-	if(!_emu->IsRunning()) return ErrorResponse(cmd.id, "no ROM loaded");
-	if(cmd.address < 0) return ErrorResponse(cmd.id, "invalid address");
-	if(cmd.value < 0 || cmd.value > 255) return ErrorResponse(cmd.id, "value must be 0-255");
+	// Only accept write_memory when running
+	if(_coreState.phase != EmuPhase::Running) {
+		return ErrorResponse(cmd.id, "emulator not running");
+	}
 
-	MemoryType memType = GetCpuMemoryType(_emu->GetConsoleType());
+	if(cmd.address < 0 || cmd.address > 0xFFFF) {
+		return ErrorResponse(cmd.id, "invalid address");
+	}
 
-	DebuggerRequest dbgRequest = _emu->GetDebugger(true);
-	Debugger* dbg = dbgRequest.GetDebugger();
-	if(!dbg) return ErrorResponse(cmd.id, "debugger not available");
+	if(cmd.value < 0 || cmd.value > 255) {
+		return ErrorResponse(cmd.id, "value must be 0-255");
+	}
 
-	dbg->GetMemoryDumper()->SetMemoryValue(memType, (uint32_t)cmd.address, (uint8_t)cmd.value);
-	return OkResponse(cmd.id, "{\"address\":" + std::to_string(cmd.address) +
-	                          ",\"value\":" + std::to_string(cmd.value) + "}");
+	// Declare intention - do NOT execute
+	{
+		std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
+		_coreState.writeAddress = (uint32_t)cmd.address;
+		_coreState.writeValue = (uint8_t)cmd.value;
+		_coreState.pendingWriteMemory = true;
+	}
+
+	// Return immediately - execution happens in emu thread
+	return OkResponse(cmd.id, R"({"accepted":true})");
 }
 
 std::string McpServer::ExecSetInput(McpTypedCommand& cmd)
@@ -536,6 +614,15 @@ std::string McpServer::ExecGetState(McpTypedCommand& cmd)
 			CpuType cpuType = GetMainCpuType(ct);
 			uint32_t pc = dbg->GetProgramCounter(cpuType, false);
 			result << ",\"pc\":" << pc;
+		}
+	}
+
+	// Include memory read result if ready (one-shot)
+	{
+		std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
+		if(_coreState.readReady) {
+			result << ",\"last_read\":" << (int)_coreState.lastReadValue;
+			_coreState.readReady = false;  // Clear after reading (one-shot)
 		}
 	}
 

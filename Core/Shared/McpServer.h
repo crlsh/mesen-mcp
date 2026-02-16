@@ -71,6 +71,41 @@ struct McpCoreState {
 	int pendingInputPort = -1;  // set_input intention (-1 = no pending input)
 	int pendingInputButtons = 0;  // set_input intention
 	bool pendingReset = false;  // reset intention
+
+	// Memory operation intentions (SINGLE-SLOT semantics)
+	// ===============================================
+	// read_memory() and write_memory() use single-slot async intention model:
+	// - Each call sets pendingReadMemory/pendingWriteMemory intention flag
+	// - ExecutePendingIntentions() executes in emu thread
+	// - Concurrent calls overwrite: last intention wins (acceptable for single-client MCP)
+	// - Operations execute WITHOUT stepping: write_memory() executes on next emu loop tick
+	//
+	// Contract:
+	//   read_memory(addr)  → Returns {"accepted": true} immediately
+	//   get_state()        → Returns {... "last_read": value} ONE-SHOT (then cleared)
+	//   write_memory(addr, val) → Returns {"accepted": true} immediately
+	//   (no "last_write" returned; write just executes)
+	//
+	// Validation:
+	//   - read_memory: address must be 0x0000 - 0xFFFF (16-bit CPU bus)
+	//   - write_memory: address must be 0x0000 - 0xFFFF, value must be 0-255
+	//   - Invalid input → error response (no intention queued)
+	//
+	// State cleanup:
+	//   - On ROM load (ExecutePendingIntentions), all memory read state cleared
+	//   - Prevents stale "last_read" from previous ROM leaking into new ROM
+	bool pendingReadMemory = false;
+	bool pendingWriteMemory = false;
+	uint32_t readAddress = 0;
+	uint32_t writeAddress = 0;
+	uint8_t writeValue = 0;
+
+	// Memory read result (ONE-SHOT: consumed by get_state(), then cleared)
+	// get_state() returns "last_read" only ONCE after read_memory() executes.
+	// Second call to get_state() will NOT include "last_read" (one-shot semantics).
+	uint8_t lastReadValue = 0;
+	bool readReady = false;
+
 	std::mutex intentionMutex;
 };
 
