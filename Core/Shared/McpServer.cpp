@@ -275,6 +275,32 @@ void McpServer::ExecutePendingIntentions()
 		_coreState.phase = loaded ? EmuPhase::Running : EmuPhase::Error;
 	}
 
+	// Execute input intention if pending (BEFORE frame execution)
+	if(_coreState.phase == EmuPhase::Running) {
+		int port, buttons;
+		{
+			std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
+			port = _coreState.pendingInputPort;
+			buttons = _coreState.pendingInputButtons;
+			_coreState.pendingInputPort = -1;  // Clear after reading
+		}
+
+		if(port >= 0) {  // Valid input pending
+			IConsole* console = _emu->GetConsoleUnsafe();
+			if(console) {
+				BaseControlManager* ctrlMgr = console->GetControlManager();
+				if(ctrlMgr) {
+					shared_ptr<BaseControlDevice> controller = ctrlMgr->GetControlDevice(port, 0);
+					if(controller) {
+						ControlDeviceState state;
+						state.State.push_back((uint8_t)(buttons & 0xFF));
+						controller->SetRawState(state);
+					}
+				}
+			}
+		}
+	}
+
 	// Execute frame stepping intention if pending
 	if(_coreState.phase == EmuPhase::Running) {
 		int frameCount;
@@ -432,23 +458,20 @@ std::string McpServer::ExecWriteMemory(McpTypedCommand& cmd)
 
 std::string McpServer::ExecSetInput(McpTypedCommand& cmd)
 {
-	if(!_emu->IsRunning()) return ErrorResponse(cmd.id, "no ROM loaded");
+	// Only accept set_input when running
+	if(_coreState.phase != EmuPhase::Running) {
+		return ErrorResponse(cmd.id, "emulator not running");
+	}
 
-	IConsole* console = _emu->GetConsoleUnsafe();
-	if(!console) return ErrorResponse(cmd.id, "no active console");
+	// Declare intention - do NOT execute
+	{
+		std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
+		_coreState.pendingInputPort = cmd.port;
+		_coreState.pendingInputButtons = cmd.buttons;
+	}
 
-	BaseControlManager* ctrlMgr = console->GetControlManager();
-	if(!ctrlMgr) return ErrorResponse(cmd.id, "no control manager");
-
-	shared_ptr<BaseControlDevice> controller = ctrlMgr->GetControlDevice(cmd.port, 0);
-	if(!controller) return ErrorResponse(cmd.id, "no controller on port " + std::to_string(cmd.port));
-
-	ControlDeviceState state;
-	state.State.push_back((uint8_t)(cmd.buttons & 0xFF));
-	controller->SetRawState(state);
-
-	return OkResponse(cmd.id, "{\"port\":" + std::to_string(cmd.port) +
-	                          ",\"buttons\":" + std::to_string(cmd.buttons) + "}");
+	// Return immediately - input executes in emu thread
+	return OkResponse(cmd.id, R"({"accepted":true})");
 }
 
 std::string McpServer::ExecGetState(McpTypedCommand& cmd)

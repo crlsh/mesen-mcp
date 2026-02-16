@@ -67,6 +67,8 @@ struct McpCoreState {
 	std::atomic<EmuPhase> phase{EmuPhase::Idle};
 	std::string pendingRomPath;
 	int pendingFrameCount = 0;  // step_frame intention
+	int pendingInputPort = -1;  // set_input intention (-1 = no pending input)
+	int pendingInputButtons = 0;  // set_input intention
 	std::mutex intentionMutex;
 };
 
