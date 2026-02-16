@@ -22,4 +22,5 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Build
-        run: msbuild Core/Core.vcxproj /p:Configuration=Release /p:Platform=x64
+        run: msbuild Mesen.sln /p:Configuration=Release /p:Platform=x64
+
