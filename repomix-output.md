@@ -268,24 +268,9 @@ makefile
 NuGet.Config
 README.md
 repomix.config.json
-SteamOS.md
 ```
 
 # Files
-
-## File: .claude/settings.local.json
-```json
-{
-  "permissions": {
-    "allow": [
-      "Bash(rtk git status:*)",
-      "Bash(dotnet build:*)",
-      "Bash(git checkout:*)",
-      "Bash(git clean:*)"
-    ]
-  }
-}
-```
 
 ## File: .editorconfig
 ```
@@ -883,32 +868,6 @@ packages/*
 
 TestHelper/*
 UI/Dependencies.zip
-```
-
-## File: .repomixignore
-```
-# Salidas de Repomix (importante ignorarlas)
-repomix-output.xml
-repomix-output.md
-
-# Carpetas de distribución y build
-dist
-node_modules
-build
-bin
-obj
-
-# Exclusiones específicas de Mesen2
-Core/Shared/Video/
-Core/Shared/Rendering/
-DrawStringCommand.cpp
-UI/Dependencies/
-
-# Archivos específicos ignorados
-Utilities/miniz.cpp
-Utilities/Audio/stb_vorbis.cpp
-**/*.bin
-**/*.icns
 ```
 
 ## File: buildPGO.sh
@@ -14728,460 +14687,6 @@ struct KeyDefinition
 };
 ```
 
-## File: Core/Shared/McpServer.cpp
-```cpp
-#include "pch.h"
-#include "Shared/McpServer.h"
-#include "Shared/Emulator.h"
-#include "Shared/BaseControlManager.h"
-#include "Shared/BaseControlDevice.h"
-#include "Shared/ControlDeviceState.h"
-#include "Shared/Interfaces/IConsole.h"
-#include "Shared/MessageManager.h"
-#include "Shared/MemoryType.h"
-#include "Shared/SettingTypes.h"
-#include "Shared/CpuType.h"
-#include "Shared/DebuggerRequest.h"
-#include "Debugger/Debugger.h"
-#include "Debugger/MemoryDumper.h"
-#include "Debugger/DebugTypes.h"
-#include "Utilities/Socket.h"
-#include "Utilities/VirtualFile.h"
-#include <sstream>
-#include <algorithm>
-std::string McpServer::ExtractString(const std::string& json, const std::string& key)
-{
-	std::string search = "\"" + key + "\"";
-	size_t pos = json.find(search);
-	if(pos == std::string::npos) return "";
-	pos = json.find(':', pos + search.size());
-	if(pos == std::string::npos) return "";
-	pos++;
-	while(pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
-	if(pos >= json.size() || json[pos] != '"') return "";
-	pos++;
-	std::string result;
-	while(pos < json.size() && json[pos] != '"') {
-		if(json[pos] == '\\' && pos + 1 < json.size()) {
-			pos++;
-			if(json[pos] == '"') result += '"';
-			else if(json[pos] == '\\') result += '\\';
-			else if(json[pos] == 'n') result += '\n';
-			else result += json[pos];
-		} else {
-			result += json[pos];
-		}
-		pos++;
-	}
-	return result;
-}
-int McpServer::ExtractInt(const std::string& json, const std::string& key, int defaultVal)
-{
-	std::string search = "\"" + key + "\"";
-	size_t pos = json.find(search);
-	if(pos == std::string::npos) return defaultVal;
-	pos = json.find(':', pos + search.size());
-	if(pos == std::string::npos) return defaultVal;
-	pos++;
-	while(pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
-	bool negative = false;
-	if(pos < json.size() && json[pos] == '-') { negative = true; pos++; }
-	int val = 0;
-	bool found = false;
-	while(pos < json.size() && json[pos] >= '0' && json[pos] <= '9') {
-		val = val * 10 + (json[pos] - '0');
-		found = true;
-		pos++;
-	}
-	if(!found) return defaultVal;
-	return negative ? -val : val;
-}
-std::string McpServer::OkResponse(int id, const std::string& resultJson)
-{
-	return "{\"ok\":true,\"result\":" + resultJson + ",\"id\":" + std::to_string(id) + "}";
-}
-std::string McpServer::ErrorResponse(int id, const std::string& error)
-{
-	// Escape quotes in error message
-	std::string escaped;
-	for(char c : error) {
-		if(c == '"') escaped += "\\\"";
-		else if(c == '\\') escaped += "\\\\";
-		else escaped += c;
-	}
-	return "{\"ok\":false,\"error\":\"" + escaped + "\",\"id\":" + std::to_string(id) + "}";
-}
-// ============================================================================
-// Constructor / Destructor
-// ============================================================================
-McpServer::McpServer(Emulator* emu, uint16_t port)
-	: _emu(emu), _port(port), _stop(false)
-{
-}
-McpServer::~McpServer()
-{
-	Stop();
-}
-// ============================================================================
-// Start / Stop
-// ============================================================================
-void McpServer::Start()
-{
-	if(_listenThread) return;
-	_stop = false;
-	_listenThread.reset(new std::thread(&McpServer::ListenLoop, this));
-	printf("[MCP] Server listening on port %d\n", _port); fflush(stdout);
-}
-void McpServer::Stop()
-{
-	_stop = true;
-	if(_listener) _listener->Close();
-	if(_listenThread && _listenThread->joinable()) {
-		_listenThread->join();
-		_listenThread.reset();
-	}
-	_listener.reset();
-}
-// ============================================================================
-// TCP Listen Loop — runs on its own thread
-// ============================================================================
-void McpServer::ListenLoop()
-{
-	_listener.reset(new Socket());
-	_listener->Bind(_port);
-	_listener->Listen(1); // Single client
-	while(!_stop) {
-		std::unique_ptr<Socket> client = _listener->Accept();
-		if(!client->ConnectionError() && !_stop) {
-			HandleClient(std::move(client));
-		}
-	}
-}
-void McpServer::HandleClient(std::unique_ptr<Socket> client)
-{
-	printf("[MCP] Client connected\n"); fflush(stdout);
-	std::string buffer;
-	char chunk[4096];
-	while(!_stop && !client->ConnectionError()) {
-		int received = client->Recv(chunk, sizeof(chunk) - 1, 0);
-		printf("[MCP] Recv returned: %d\n", received); fflush(stdout);
-		if(received <= 0) break;
-		chunk[received] = '\0';
-		buffer += chunk;
-		size_t nlPos;
-		while((nlPos = buffer.find('\n')) != std::string::npos) {
-			std::string line = buffer.substr(0, nlPos);
-			buffer = buffer.substr(nlPos + 1);
-			if(!line.empty() && line.back() == '\r') line.pop_back();
-			if(line.empty()) continue;
-			printf("[MCP] Parsing: %s\n", line.c_str()); fflush(stdout);
-			auto cmd = ParseCommand(line);
-			if(!cmd) {
-				std::string err = ErrorResponse(0, "invalid command") + "\n";
-				client->Send((char*)err.c_str(), (int)err.size(), 0);
-				continue;
-			}
-			{
-				std::lock_guard<std::mutex> lock(_queueMutex);
-				_commandQueue.push(cmd);
-			}
-			std::string response = cmd->WaitForResponse();
-			response += "\n";
-			client->Send((char*)response.c_str(), (int)response.size(), 0);
-		}
-	}
-}
-std::shared_ptr<McpTypedCommand> McpServer::ParseCommand(const std::string& json)
-{
-	std::string method = ExtractString(json, "method");
-	if(method.empty()) return nullptr;
-	auto cmd = std::make_shared<McpTypedCommand>();
-	cmd->id = ExtractInt(json, "id", 0);
-	if(method == "load_rom") {
-		cmd->type = McpCommandType::LoadRom;
-		cmd->path = ExtractString(json, "path");
-	} else if(method == "step_frame") {
-		cmd->type = McpCommandType::StepFrame;
-		cmd->count = ExtractInt(json, "count", 1);
-	} else if(method == "read_memory") {
-		cmd->type = McpCommandType::ReadMemory;
-		cmd->address = ExtractInt(json, "address", -1);
-		cmd->count = ExtractInt(json, "size", 1);
-	} else if(method == "write_memory") {
-		cmd->type = McpCommandType::WriteMemory;
-		cmd->address = ExtractInt(json, "address", -1);
-		cmd->value = ExtractInt(json, "value", -1);
-	} else if(method == "set_input") {
-		cmd->type = McpCommandType::SetInput;
-		cmd->port = ExtractInt(json, "port", 0);
-		cmd->buttons = ExtractInt(json, "buttons", 0);
-	} else if(method == "get_state") {
-		cmd->type = McpCommandType::GetState;
-	} else {
-		return nullptr;
-	}
-	return cmd;
-}
-void McpServer::DrainCommandQueue()
-{
-	static int drainCount = 0;
-	if(++drainCount % 600 == 1) { printf("[MCP] Drain count=%d\n", drainCount); fflush(stdout); }
-	while(true) {
-		std::shared_ptr<McpTypedCommand> cmd;
-		{
-			std::lock_guard<std::mutex> lock(_queueMutex);
-			if(_commandQueue.empty()) break;
-			cmd = _commandQueue.front();
-			_commandQueue.pop();
-		}
-		std::string response = ExecuteCommand(*cmd);
-		cmd->SetResponse(response);
-	}
-}
-std::string McpServer::ExecuteCommand(McpTypedCommand& cmd)
-{
-	switch(cmd.type) {
-		case McpCommandType::LoadRom: return ExecLoadRom(cmd);
-		case McpCommandType::StepFrame: return ExecStepFrame(cmd);
-		case McpCommandType::ReadMemory: return ExecReadMemory(cmd);
-		case McpCommandType::WriteMemory: return ExecWriteMemory(cmd);
-		case McpCommandType::SetInput: return ExecSetInput(cmd);
-		case McpCommandType::GetState: return ExecGetState(cmd);
-		default: return ErrorResponse(cmd.id, "unknown command type");
-	}
-}
-static MemoryType GetCpuMemoryType(ConsoleType ct)
-{
-	switch(ct) {
-		case ConsoleType::Nes: return MemoryType::NesMemory;
-		case ConsoleType::Snes: return MemoryType::SnesMemory;
-		case ConsoleType::Gameboy: return MemoryType::GameboyMemory;
-		case ConsoleType::PcEngine: return MemoryType::PceMemory;
-		case ConsoleType::Sms: return MemoryType::SmsMemory;
-		case ConsoleType::Gba: return MemoryType::GbaMemory;
-		default: return MemoryType::NesMemory;
-	}
-}
-static CpuType GetMainCpuType(ConsoleType ct)
-{
-	switch(ct) {
-		case ConsoleType::Nes: return CpuType::Nes;
-		case ConsoleType::Snes: return CpuType::Snes;
-		case ConsoleType::Gameboy: return CpuType::Gameboy;
-		case ConsoleType::PcEngine: return CpuType::Pce;
-		case ConsoleType::Gba: return CpuType::Gba;
-		default: return CpuType::Nes;
-	}
-}
-std::string McpServer::ExecLoadRom(McpTypedCommand& cmd)
-{
-	if(cmd.path.empty()) {
-		return ErrorResponse(cmd.id, "missing path");
-	}
-	if(_emu->IsRunning()) {
-		_emu->Stop(false, false, true);
-	}
-	bool loaded = _emu->LoadRom((VirtualFile)cmd.path, VirtualFile());
-	if(!loaded) {
-		_coreState.romLoaded = false;
-		_coreState.consoleType = -1;
-		_coreState.externalControl = false;
-		return ErrorResponse(cmd.id, "failed to load ROM");
-	}
-	ConsoleType ct = _emu->GetConsoleType();
-	_coreState.consoleType = (int)ct;
-	_coreState.romLoaded = true;
-	_coreState.externalControl = true;
-	std::ostringstream result;
-	result << "{\"console_type\":" << (int)ct
-	       << ",\"path\":\"";
-	for(char c : cmd.path) {
-		if(c == '\\') result << "\\\\";
-		else if(c == '"') result << "\\\"";
-		else result << c;
-	}
-	result << "\",\"mode\":\"external_controlled\"}";
-	MessageManager::Log("[MCP] ROM loaded: " + cmd.path + " (console=" + std::to_string((int)ct) + ")");
-	return OkResponse(cmd.id, result.str());
-}
-std::string McpServer::ExecStepFrame(McpTypedCommand& cmd)
-{
-	if(!_coreState.romLoaded) return ErrorResponse(cmd.id, "no ROM loaded");
-	int count = cmd.count;
-	if(count < 1) count = 1;
-	if(count > 3600) count = 3600;
-	IConsole* console = _emu->GetConsoleUnsafe();
-	if(!console) return ErrorResponse(cmd.id, "no active console");
-	for(int i = 0; i < count; i++) {
-		console->RunFrame();
-	}
-	uint32_t frameCount = _emu->GetFrameCount();
-	std::ostringstream result;
-	result << "{\"framesExecuted\":" << count << ",\"frameCount\":" << frameCount << "}";
-	return OkResponse(cmd.id, result.str());
-}
-std::string McpServer::ExecReadMemory(McpTypedCommand& cmd)
-{
-	if(!_coreState.romLoaded) return ErrorResponse(cmd.id, "no ROM loaded");
-	if(cmd.address < 0) return ErrorResponse(cmd.id, "invalid address");
-	MemoryType memType = GetCpuMemoryType((ConsoleType)_coreState.consoleType);
-	DebuggerRequest dbgRequest = _emu->GetDebugger(true);
-	Debugger* dbg = dbgRequest.GetDebugger();
-	if(!dbg) return ErrorResponse(cmd.id, "debugger not available");
-	int size = cmd.count;
-	if(size < 1) size = 1;
-	if(size > 256) size = 256;
-	if(size == 1) {
-		uint8_t val = dbg->GetMemoryDumper()->GetMemoryValue(memType, (uint32_t)cmd.address);
-		return OkResponse(cmd.id, "{\"value\":" + std::to_string(val) + "}");
-	}
-	std::vector<uint8_t> buf(size);
-	dbg->GetMemoryDumper()->GetMemoryValues(memType, (uint32_t)cmd.address, (uint32_t)(cmd.address + size - 1), buf.data());
-	std::ostringstream result;
-	result << "{\"address\":" << cmd.address << ",\"size\":" << size << ",\"data\":[";
-	for(int i = 0; i < size; i++) {
-		if(i > 0) result << ",";
-		result << (int)buf[i];
-	}
-	result << "]}";
-	return OkResponse(cmd.id, result.str());
-}
-std::string McpServer::ExecWriteMemory(McpTypedCommand& cmd)
-{
-	if(!_coreState.romLoaded) return ErrorResponse(cmd.id, "no ROM loaded");
-	if(cmd.address < 0) return ErrorResponse(cmd.id, "invalid address");
-	if(cmd.value < 0 || cmd.value > 255) return ErrorResponse(cmd.id, "value must be 0-255");
-	MemoryType memType = GetCpuMemoryType((ConsoleType)_coreState.consoleType);
-	DebuggerRequest dbgRequest = _emu->GetDebugger(true);
-	Debugger* dbg = dbgRequest.GetDebugger();
-	if(!dbg) return ErrorResponse(cmd.id, "debugger not available");
-	dbg->GetMemoryDumper()->SetMemoryValue(memType, (uint32_t)cmd.address, (uint8_t)cmd.value);
-	return OkResponse(cmd.id, "{\"address\":" + std::to_string(cmd.address) +
-	                          ",\"value\":" + std::to_string(cmd.value) + "}");
-}
-std::string McpServer::ExecSetInput(McpTypedCommand& cmd)
-{
-	if(!_coreState.romLoaded) return ErrorResponse(cmd.id, "no ROM loaded");
-	IConsole* console = _emu->GetConsoleUnsafe();
-	if(!console) return ErrorResponse(cmd.id, "no active console");
-	BaseControlManager* ctrlMgr = console->GetControlManager();
-	if(!ctrlMgr) return ErrorResponse(cmd.id, "no control manager");
-	shared_ptr<BaseControlDevice> controller = ctrlMgr->GetControlDevice(cmd.port, 0);
-	if(!controller) return ErrorResponse(cmd.id, "no controller on port " + std::to_string(cmd.port));
-	ControlDeviceState state;
-	state.State.push_back((uint8_t)(cmd.buttons & 0xFF));
-	controller->SetRawState(state);
-	return OkResponse(cmd.id, "{\"port\":" + std::to_string(cmd.port) +
-	                          ",\"buttons\":" + std::to_string(cmd.buttons) + "}");
-}
-std::string McpServer::ExecGetState(McpTypedCommand& cmd)
-{
-	std::ostringstream result;
-	result << "{\"rom_loaded\":" << (_coreState.romLoaded ? "true" : "false")
-	       << ",\"console_type\":" << _coreState.consoleType
-	       << ",\"mode\":\"" << (_coreState.externalControl ? "external_controlled" : "free_running") << "\"";
-	if(_coreState.romLoaded) {
-		result << ",\"frame_count\":" << _emu->GetFrameCount();
-		DebuggerRequest dbgRequest = _emu->GetDebugger(true);
-		Debugger* dbg = dbgRequest.GetDebugger();
-		if(dbg) {
-			CpuType cpuType = GetMainCpuType((ConsoleType)_coreState.consoleType);
-			uint32_t pc = dbg->GetProgramCounter(cpuType, false);
-			result << ",\"pc\":" << pc;
-		}
-	}
-	result << "}";
-	return OkResponse(cmd.id, result.str());
-}
-```
-
-## File: Core/Shared/McpServer.h
-```
-#pragma once
-#include "pch.h"
-#include <thread>
-#include <mutex>
-#include <condition_variable>
-#include <queue>
-#include <atomic>
-#include <string>
-#include <vector>
-class Emulator;
-class Socket;
-enum class McpCommandType {
-	LoadRom,
-	StepFrame,
-	ReadMemory,
-	WriteMemory,
-	SetInput,
-	GetState
-};
-struct McpTypedCommand {
-	McpCommandType type;
-	int id = 0;
-	std::string path;
-	int address = 0;
-	int value = 0;
-	int count = 1;
-	int port = 0;
-	int buttons = 0;
-	std::string response;
-	bool responseReady = false;
-	std::mutex mutex;
-	std::condition_variable cv;
-	void SetResponse(const std::string& resp) {
-		std::lock_guard<std::mutex> lock(mutex);
-		response = resp;
-		responseReady = true;
-		cv.notify_one();
-	}
-	std::string WaitForResponse() {
-		std::unique_lock<std::mutex> lock(mutex);
-		bool ok = cv.wait_for(lock, std::chrono::seconds(30), [this] { return responseReady; });
-		if(!ok) return "{\"ok\":false,\"error\":\"timeout\",\"id\":0}";
-		return response;
-	}
-};
-struct McpCoreState {
-	int consoleType = -1;
-	bool romLoaded = false;
-	bool externalControl = false;
-};
-class McpServer {
-private:
-	Emulator* _emu;
-	std::unique_ptr<std::thread> _listenThread;
-	std::unique_ptr<Socket> _listener;
-	std::atomic<bool> _stop;
-	uint16_t _port;
-	std::mutex _queueMutex;
-	std::queue<std::shared_ptr<McpTypedCommand>> _commandQueue;
-	McpCoreState _coreState;
-	void ListenLoop();
-	void HandleClient(std::unique_ptr<Socket> client);
-	std::shared_ptr<McpTypedCommand> ParseCommand(const std::string& json);
-	static std::string ExtractString(const std::string& json, const std::string& key);
-	static int ExtractInt(const std::string& json, const std::string& key, int defaultVal = 0);
-	std::string ExecuteCommand(McpTypedCommand& cmd);
-	std::string ExecLoadRom(McpTypedCommand& cmd);
-	std::string ExecStepFrame(McpTypedCommand& cmd);
-	std::string ExecReadMemory(McpTypedCommand& cmd);
-	std::string ExecWriteMemory(McpTypedCommand& cmd);
-	std::string ExecSetInput(McpTypedCommand& cmd);
-	std::string ExecGetState(McpTypedCommand& cmd);
-	static std::string OkResponse(int id, const std::string& resultJson);
-	static std::string ErrorResponse(int id, const std::string& error);
-public:
-	McpServer(Emulator* emu, uint16_t port = 12345);
-	~McpServer();
-	void Start();
-	void Stop();
-	void DrainCommandQueue();
-	bool IsExternalControlled() const { return _coreState.externalControl; }
-	McpCoreState& GetCoreState() { return _coreState; }
-};
-```
-
 ## File: Core/Shared/MemoryOperationType.h
 ```
 #pragma once
@@ -21015,297 +20520,51 @@ clean:
 </configuration>
 ```
 
-## File: repomix.config.json
+## File: .claude/settings.local.json
 ```json
 {
-  "$schema": "https://repomix.com/schemas/latest/schema.json",
-  "input": {
-    "maxFileSize": 52428800
-  },
-  "output": {
-    "filePath": "repomix-output.md",
-    "style": "markdown",
-    "parsableStyle": true,
-    "fileSummary": true,
-    "directoryStructure": true,
-    "files": true,
-    "removeComments": true,
-    "removeEmptyLines": true,
-    "compress": false,
-    "topFilesLength": 10,
-    "showLineNumbers": false,
-    "truncateBase64": false,
-    "copyToClipboard": false,
-    "includeFullDirectoryStructure": false,
-    "tokenCountTree": false,
-    "headerText": "CONTEXTO DE INFRAESTRUCTURA MCP:\nEste repositorio (Mesen2) actúa como el motor de emulación. El control programático, la lectura de memoria y la interacción con LLMs se gestionan mediante el repositorio paralelo 'mesen-mcp-infra'.\nLos puntos de entrada clave para el control externo en este repositorio son InteropDLL y Core/Debugger.",
-    "git": {
-      "sortByChanges": true,
-      "sortByChangesMaxCommits": 100,
-      "includeDiffs": false,
-      "includeLogs": false,
-      "includeLogsCount": 50
-    }
-  },
-  "ignore": {
-    "useGitignore": true,
-    "useDotIgnore": true,
-    "useDefaultPatterns": true,
-    "customPatterns": [
-      "**/repomix-output.*",
-      "**/bin/**",
-      "**/obj/**",
-      "**/*.pdb",
-      "**/*.lib",
-      "**/*.dll",
-      "**/*.zip",
-      "**/*.exe",
-      "**/*.vcxproj*",
-      "**/*.filters",
-      "**/*.user",
-      "**/*.sln",
-      "**/Localization/**",
-      "UI/**",
-      "SevenZip/**",
-      "Lua/**",
-      "Utilities/**",
-      "Linux/**",
-      "MacOS/**",
-      "Windows/**",
-      "Sdl/**",
-      "PGOHelper/**",
-      "Core/NES/**",
-      "Core/SNES/**",
-      "Core/Gameboy/**",
-      "Core/GBA/**",
-      "Core/PCE/**",
-      "Core/SMS/**",
-      "Core/WS/**"
+  "permissions": {
+    "allow": [
+      "Bash(rtk git status:*)",
+      "Bash(dotnet build:*)",
+      "Bash(git checkout:*)",
+      "Bash(git clean:*)",
+      "Bash(ls:*)",
+      "mcp__mesen2__get_state",
+      "mcp__mesen2__launch_mesen"
     ]
   },
-  "security": {
-    "enableSecurityCheck": true
-  },
-  "tokenCount": {
-    "encoding": "o200k_base"
-  }
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "mesen2"
+  ]
 }
 ```
 
-## File: SteamOS.md
-```markdown
-Running Mesen through the Steam Deck's _Game Mode_ is possible with some caveats regarding rendering the UI.  
-Due to Gamescope (SteamOS' compositor) not handling Avalonia UI's popups very well (a [solution](https://github.com/AvaloniaUI/Avalonia/pull/14366) is available but [has been reverted due to other issues](https://github.com/AvaloniaUI/Avalonia/pull/14573)), Mesen's menus for settings are not working through Gamescope unless running Mesen [through running KDE Plasma's Desktop through a script](https://www.reddit.com/r/SteamDeck/comments/zqgx9g/desktop_mode_within_gaming_mode_updated_for_new/).
-
- Installation instructions:
- * Download the **[Linux - AppImage](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20(Linux%20x64%20-%20AppImage).zip)** nightly build.
- * **Mark the AppImage as executable.** (right click > Properties > Permissions > Is executable)
- * Add the application as a non-Steam shortcut to be able to run it through Steam on both _Desktop Mode_ and _Game Mode_. (right click > Add to Steam)
- * Customise the non-Steam shortcut through Steam to your desire. (in Steam: search the AppImage's filename, right click > Properties; from there you can change the icon, shortcut name and launch options)
- * Create a folder called `Mesen.AppImage.Config` in the same directory where the AppImage is stored.
- * Run it the first time. When asking where to store the settings, choose the `Store the data in my user profile` option. ![254295455-88c1942d-b81f-48ee-a3a3-74b9f3ecd9b7-1](https://github.com/kevin-wijnen/Mesen2/assets/58944808/9f4ff1e3-4df6-4441-958b-ce96599ef69d)
- * Set up the controls as asked by Mesen.
-
-**Due to Gamescope not rendering the UI menus, it is recommended to bind some keyboard shortcuts to L4/R4/L5/R5 (the Back Grip Buttons).** You can rebind controls in _Game Mode_ by clicking the Controller icon. You can save the layout by clicking the Cog icon (next to `Edit Layout`) > Export Layout > select `New Template` as the Export Type to use it across multiple shortcuts. 
-It is recommended to:
-* Bind `Control Key + O Key` to open the file picker for opening a game file.
-* Bind `Escape Key` to pause emulation.
-* Bind `F11` to enter in or out of fullscreen. 
-
-**If sound does not work**, check if an audio device is chosen by Mesen. (in Mesen: Settings > Audio > General (Device))
-
-**To make game-specific shortcuts**: Repeat the non-Steam shortcut step on the Mesen AppImage. Customise the new shortcut with a Launch Option (in Steam: right click > Properties; Launch Options). To find possible Launch Options, check the Command-line options menu (in Mesen: Help > Command-line options). When you want to supply a game with the shortcut, put the entire file location of the game in double quotes ("game-filepath") as the first part of the launch options. Add additional options (`--fullscreen` for example) _after_ the file location.
+## File: .repomixignore
 ```
+# Salidas de Repomix (importante ignorarlas)
+repomix-output.xml
+repomix-output.md
 
-## File: .github/workflows/build.yml
-```yaml
-name: Build Mesen
-on: [push]
-env:
-  DOTNET_CLI_TELEMETRY_OPTOUT: 1
-  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
-jobs:
-  windows:
-    strategy:
-      matrix:
-        platform: [
-          {netversion: 6.x, targetframework: net6.0, aot: false, singleFile: true, aotString: ""},
-          {netversion: 8.x, targetframework: net8.0, aot: false, singleFile: true, aotString: ""},
-          {netversion: 8.x, targetframework: net8.0, aot: true, singleFile: false, aotString: " - AoT"}
-        ]
-      fail-fast: false
-    runs-on: windows-latest
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Install .NET Core
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ matrix.platform.netversion }}
-      - name: Setup MSBuild.exe
-        uses: microsoft/setup-msbuild@v2
-        with:
-          msbuild-architecture: x64
-      - name: Restore packages
-        run: dotnet restore -p:TargetFramework="${{ matrix.platform.targetframework }}" -r win-x64 -p:PublishAot="${{ matrix.platform.aot }}" -p:BuildWithNetFrameworkHostedCompiler=true
-      - name: Write commit SHA1 to file
-        uses: ./.github/actions/build-sha1-action
-      - name: Build Mesen
-        run: msbuild -nologo -v:d -clp:ForceConsoleColor -m -p:Configuration=Release -p:Platform=x64 -t:Clean,UI -p:TargetFramework="${{ matrix.platform.targetframework }}"
-      - name: Publish Mesen
-        run: dotnet publish --no-restore -c Release -p:PublishAot="${{ matrix.platform.aot }}" -p:SelfContained="${{ matrix.platform.aot }}" -p:PublishSingleFile="${{ matrix.platform.singleFile }}" -p:OptimizeUi="true" -p:Platform="Any CPU" -p:TargetFramework="${{ matrix.platform.targetframework }}" -r win-x64 Mesen.sln /p:PublishProfile=UI\Properties\PublishProfiles\Release.pubxml
-      - name: Upload Mesen
-        uses: actions/upload-artifact@v4
-        with:
-          name: Mesen (Windows - ${{ matrix.platform.targetframework }}${{ matrix.platform.aotString }})
-          path: |
-            build/TmpReleaseBuild/Mesen.exe
-  linux:
-    strategy:
-      matrix:
-        compiler: [gcc, clang, clang_aot]
-        platform: [
-          {os: ubuntu-22.04, path: x64},
-          {os: ubuntu-22.04-arm, path: arm64}
-        ]
-        exclude:
-          - platform: { os: ubuntu-22.04-arm, path: arm64 }
-            compiler: clang_aot
-        include:
-          - compiler: gcc
-            make_flags: "USE_GCC=true"
-          - compiler: clang
-            make_flags: ""
-          - compiler: clang_aot
-            make_flags: "USE_AOT=true"
-      fail-fast: false
-    runs-on: ${{ matrix.platform.os }}
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Install .NET Core
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.x
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -qy
-          sudo apt-get install -qy libsdl2-dev ccache
-      - name: Setup CCache
-        uses: ./.github/actions/setup-ccache-action
-      - name: Write commit SHA1 to file
-        uses: ./.github/actions/build-sha1-action
-      - name: Build Mesen
-        run: |
-          make -j$(nproc) -O ${{ matrix.make_flags }} LTO=true STATICLINK=true SYSTEM_LIBEVDEV=false
-      - name: Upload Mesen
-        uses: actions/upload-artifact@v4
-        with:
-          name: Mesen (Linux - ${{ matrix.platform.os }} - ${{ matrix.compiler }})
-          path: bin/linux-${{ matrix.platform.path }}/Release/linux-${{ matrix.platform.path }}/publish/Mesen
-  appimage:
-    strategy:
-      matrix:
-        compiler: [clang_appimage]
-        platform: [
-          {os: ubuntu-22.04, name: x64, script: Linux/appimage/appimage.sh},
-          {os: ubuntu-22.04-arm, name: ARM64, script: Linux/appimage/appimage-arm64.sh}
-        ]
-    runs-on: ${{ matrix.platform.os }}
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Install .NET Core
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.x
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -qy
-          sudo apt-get install -qy libsdl2-dev libfuse2 ccache
-      - name: Setup CCache
-        uses: ./.github/actions/setup-ccache-action
-      - name: Write commit SHA1 to file
-        uses: ./.github/actions/build-sha1-action
-      - name: Build Mesen (AppImage)
-        run: |
-          ${{ matrix.platform.script }}
-      - name: Upload Mesen (AppImage)
-        uses: actions/upload-artifact@v4
-        with:
-          name: Mesen (Linux ${{ matrix.platform.name }} - AppImage)
-          path: Mesen.AppImage
-  macos:
-    strategy:
-      matrix:
-        compiler: [clang, clang_aot]
-        platform: [
-          {os: macos-13, arch: x64},
-          {os: macos-14, arch: arm64}
-        ]
-        include:
-          - compiler: clang
-            make_flags: ""
-          - compiler: clang_aot
-            make_flags: "USE_AOT=true"
-      fail-fast: false
-    runs-on: ${{ matrix.platform.os }}
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Install .NET Core
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.x
-      - name: Install dependencies
-        run: |
-          brew install sdl2 ccache
-      - name: Get brew prefix
-        run: |
-          echo "brewPrefix=$(brew --prefix)" >> "$GITHUB_ENV"
-      - name: Setup CCache
-        uses: ./.github/actions/setup-ccache-action
-        with:
-          ccache-path: '${{ env.brewPrefix }}/opt/ccache/libexec'
-      - name: Write commit SHA1 to file
-        uses: ./.github/actions/build-sha1-action
-      - name: Build Mesen
-        run: |
-          ${{ matrix.make_flags }} make -j$(sysctl -n hw.logicalcpu)
-      - name: Sign binary
-        env:
-          APP_NAME: bin/osx-${{ matrix.platform.arch }}/Release/osx-${{ matrix.platform.arch }}/publish/Mesen.app
-          CERT_DATA: ${{ secrets.MACOS_CERTIFICATE }}
-          CERT_PASS: ${{ secrets.MACOS_CERTIFICATE_PWD }}
-          ENTITLEMENTS: UI/Mesen.entitlements
-          SIGNING_IDENTITY: Mesen
-        run: |
-          echo "$CERT_DATA" | base64 --decode > /tmp/certs.p12
-          security create-keychain -p actions macos-build.keychain
-          security default-keychain -s macos-build.keychain
-          security unlock-keychain -p actions macos-build.keychain
-          security set-keychain-settings -t 3600 -u macos-build.keychain
-          security import /tmp/certs.p12 -k ~/Library/Keychains/macos-build.keychain -P "$CERT_PASS" -T /usr/bin/codesign -T /usr/bin/productsign
-          security set-key-partition-list -S apple-tool:,apple: -s -k actions macos-build.keychain
-          security find-identity -v macos-build.keychain
-          echo "[INFO] Signing app file"
-          codesign --force --deep --timestamp --keychain macos-build.keychain --options=runtime --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP_NAME"
-      - name: Zip Mesen.app
-        run: |
-          ditto -c -k --sequesterRsrc --keepParent bin/osx-${{ matrix.platform.arch }}/Release/osx-${{ matrix.platform.arch }}/publish/Mesen.app bin/osx-${{ matrix.platform.arch }}/Release/Mesen.app.zip
-      - name: Upload Mesen
-        uses: actions/upload-artifact@v4
-        with:
-          name: Mesen (macOS - ${{ matrix.platform.os }} - ${{ matrix.compiler }})
-          path: bin/osx-${{ matrix.platform.arch }}/Release/Mesen.app.zip
+# Carpetas de distribución y build
+dist
+node_modules
+build
+bin
+obj
+
+# Exclusiones específicas de Mesen2
+Core/Shared/Video/
+Core/Shared/Rendering/
+DrawStringCommand.cpp
+UI/Dependencies/
+
+# Archivos específicos ignorados
+Utilities/miniz.cpp
+Utilities/Audio/stb_vorbis.cpp
+**/*.bin
+**/*.icns
 ```
 
 ## File: Core/Debugger/Debugger.h
@@ -23660,288 +22919,6 @@ public:
 };
 ```
 
-## File: Core/Shared/Emulator.h
-```
-#pragma once
-#include "pch.h"
-#include "Core/Debugger/DebugTypes.h"
-#include "Core/Debugger/Debugger.h"
-#include "Core/Debugger/DebugUtilities.h"
-#include "Core/Shared/EmulatorLock.h"
-#include "Core/Shared/Interfaces/IConsole.h"
-#include "Core/Shared/Audio/AudioPlayerTypes.h"
-#include "Utilities/Timer.h"
-#include "Utilities/safe_ptr.h"
-#include "Utilities/SimpleLock.h"
-#include "Utilities/VirtualFile.h"
-class Debugger;
-class DebugHud;
-class SoundMixer;
-class VideoRenderer;
-class VideoDecoder;
-class NotificationManager;
-class EmuSettings;
-class SaveStateManager;
-class RewindManager;
-class BatteryManager;
-class CheatManager;
-class MovieManager;
-class HistoryViewer;
-class FrameLimiter;
-class DebugStats;
-class BaseControlManager;
-class VirtualFile;
-class BaseVideoFilter;
-class ShortcutKeyHandler;
-class SystemActionManager;
-class AudioPlayerHud;
-class GameServer;
-class GameClient;
-class McpServer;
-class IInputRecorder;
-class IInputProvider;
-struct RomInfo;
-struct TimingInfo;
-enum class MemoryOperationType;
-enum class MemoryType;
-enum class EventType;
-enum class ConsoleRegion;
-enum class ConsoleType;
-enum class HashType;
-enum class TapeRecorderAction;
-struct ConsoleMemoryInfo
-{
-	void* Memory;
-	uint32_t Size;
-};
-class Emulator
-{
-private:
-	friend class DebuggerRequest;
-	friend class EmulatorLock;
-	unique_ptr<thread> _emuThread;
-	unique_ptr<AudioPlayerHud> _audioPlayerHud;
-	safe_ptr<IConsole> _console;
-	shared_ptr<ShortcutKeyHandler> _shortcutKeyHandler;
-	safe_ptr<Debugger> _debugger;
-	shared_ptr<SystemActionManager> _systemActionManager;
-	const unique_ptr<EmuSettings> _settings;
-	const unique_ptr<DebugHud> _debugHud;
-	const unique_ptr<DebugHud> _scriptHud;
-	const unique_ptr<NotificationManager> _notificationManager;
-	const unique_ptr<BatteryManager> _batteryManager;
-	const unique_ptr<SoundMixer> _soundMixer;
-	const unique_ptr<VideoRenderer> _videoRenderer;
-	const unique_ptr<VideoDecoder> _videoDecoder;
-	const unique_ptr<SaveStateManager> _saveStateManager;
-	const unique_ptr<CheatManager> _cheatManager;
-	const unique_ptr<MovieManager> _movieManager;
-	const unique_ptr<HistoryViewer> _historyViewer;
-	const shared_ptr<GameServer> _gameServer;
-	const shared_ptr<GameClient> _gameClient;
-	const shared_ptr<RewindManager> _rewindManager;
-	unique_ptr<McpServer> _mcpServer;
-	thread_local static thread::id _currentThreadId;
-	thread::id _emulationThreadId;
-	atomic<uint32_t> _lockCounter;
-	SimpleLock _runLock;
-	SimpleLock _loadLock;
-	SimpleLock _debuggerLock;
-	atomic<bool> _stopFlag;
-	atomic<bool> _paused;
-	atomic<bool> _pauseOnNextFrame;
-	atomic<bool> _threadPaused;
-	atomic<int> _debugRequestCount;
-	atomic<int> _blockDebuggerRequestCount;
-	atomic<bool> _isRunAheadFrame;
-	bool _frameRunning = false;
-	RomInfo _rom;
-	ConsoleType _consoleType = {};
-	ConsoleMemoryInfo _consoleMemory[DebugUtilities::GetMemoryTypeCount()] = {};
-	unique_ptr<DebugStats> _stats;
-	unique_ptr<FrameLimiter> _frameLimiter;
-	Timer _lastFrameTimer;
-	double _frameDelay = 0;
-	uint32_t _autoSaveStateFrameCounter = 0;
-	int32_t _stopCode = 0;
-	bool _stopRequested = false;
-	void WaitForLock();
-	void WaitForPauseEnd();
-	void ProcessAutoSaveState();
-	bool ProcessSystemActions();
-	void RunFrameWithRunAhead();
-	void BlockDebuggerRequests();
-	void ResetDebugger(bool startDebugger = false);
-	double GetFrameDelay();
-	void TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_ptr<IConsole>& console, bool useFileSignature);
-	template<typename T> void TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_ptr<IConsole>& console, bool useFileSignature);
-	void InitConsole(unique_ptr<IConsole>& newConsole, ConsoleMemoryInfo originalConsoleMemory[], bool preserveRom);
-	bool InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool stopRom = true, bool forPowerCycle = false);
-public:
-	Emulator();
-	~Emulator();
-	void Initialize(bool enableShortcuts = true);
-	void Release();
-	void Run();
-	void Stop(bool sendNotification, bool preventRecentGameSave = false, bool saveBattery = true);
-	void OnBeforeSendFrame();
-	void ProcessEndOfFrame();
-	void Reset();
-	void ReloadRom(bool forPowerCycle);
-	void PowerCycle();
-	void PauseOnNextFrame();
-	void Pause();
-	void Resume();
-	bool IsPaused();
-	void OnBeforePause(bool clearAudioBuffer);
-	bool LoadRom(VirtualFile romFile, VirtualFile patchFile, bool stopRom = true, bool forPowerCycle = false);
-	RomInfo& GetRomInfo() { return _rom; }
-	string GetHash(HashType type);
-	uint32_t GetCrc32();
-	PpuFrameInfo GetPpuFrame();
-	ConsoleRegion GetRegion();
-	shared_ptr<IConsole> GetConsole();
-	IConsole* GetConsoleUnsafe();
-	ConsoleType GetConsoleType();
-	vector<CpuType> GetCpuTypes();
-	uint64_t GetMasterClock();
-	uint32_t GetMasterClockRate();
-	EmulatorLock AcquireLock(bool allowDebuggerLock = true);
-	void Lock();
-	void Unlock();
-	bool IsThreadPaused();
-	bool IsDebuggerBlocked() { return _blockDebuggerRequestCount > 0; }
-	void SuspendDebugger(bool release);
-	void Serialize(ostream& out, bool includeSettings, int compressionLevel = 1);
-	DeserializeResult Deserialize(istream& in, uint32_t fileFormatVersion, bool includeSettings, optional<ConsoleType> consoleType = std::nullopt, bool sendNotification = true);
-	SoundMixer* GetSoundMixer() { return _soundMixer.get(); }
-	VideoRenderer* GetVideoRenderer() { return _videoRenderer.get(); }
-	VideoDecoder* GetVideoDecoder() { return _videoDecoder.get(); }
-	ShortcutKeyHandler* GetShortcutKeyHandler() { return _shortcutKeyHandler.get(); }
-	NotificationManager* GetNotificationManager() { return _notificationManager.get(); }
-	EmuSettings* GetSettings() { return _settings.get(); }
-	SaveStateManager* GetSaveStateManager() { return _saveStateManager.get(); }
-	RewindManager* GetRewindManager() { return _rewindManager.get(); }
-	DebugHud* GetDebugHud() { return _debugHud.get(); }
-	DebugHud* GetScriptHud() { return _scriptHud.get(); }
-	BatteryManager* GetBatteryManager() { return _batteryManager.get(); }
-	CheatManager* GetCheatManager() { return _cheatManager.get(); }
-	MovieManager* GetMovieManager() { return _movieManager.get(); }
-	HistoryViewer* GetHistoryViewer() { return _historyViewer.get(); }
-	GameServer* GetGameServer() { return _gameServer.get(); }
-	GameClient* GetGameClient() { return _gameClient.get(); }
-	McpServer* GetMcpServer() { return _mcpServer.get(); }
-	shared_ptr<SystemActionManager> GetSystemActionManager() { return _systemActionManager; }
-	BaseVideoFilter* GetVideoFilter(bool getDefaultFilter = false);
-	void GetScreenRotationOverride(uint32_t& rotation);
-	void InputBarcode(uint64_t barcode, uint32_t digitCount);
-	void ProcessTapeRecorderAction(TapeRecorderAction action, string filename);
-	ShortcutState IsShortcutAllowed(EmulatorShortcut shortcut, uint32_t shortcutParam);
-	bool IsKeyboardConnected();
-	void InitDebugger();
-	void StopDebugger();
-	DebuggerRequest GetDebugger(bool autoInit = false);
-	bool IsDebugging() { return !!_debugger; }
-	Debugger* InternalGetDebugger() { return _debugger.get(); }
-	thread::id GetEmulationThreadId() { return _emulationThreadId; }
-	bool IsEmulationThread();
-	int32_t GetStopCode() { return _stopCode; }
-	void SetStopCode(int32_t stopCode);
-	void RegisterMemory(MemoryType type, void* memory, uint32_t size);
-	ConsoleMemoryInfo GetMemory(MemoryType type);
-	AudioTrackInfo GetAudioTrackInfo();
-	void ProcessAudioPlayerAction(AudioPlayerActionParams p);
-	AudioPlayerHud* GetAudioPlayerHud() { return _audioPlayerHud.get(); }
-	bool IsRunning() { return _console != nullptr; }
-	bool IsRunAheadFrame() { return _isRunAheadFrame; }
-	TimingInfo GetTimingInfo(CpuType cpuType);
-	uint32_t GetFrameCount();
-	uint32_t GetLagCounter();
-	void ResetLagCounter();
-	bool HasControlDevice(ControllerType type);
-	void RegisterInputRecorder(IInputRecorder* recorder);
-	void UnregisterInputRecorder(IInputRecorder* recorder);
-	void RegisterInputProvider(IInputProvider* provider);
-	void UnregisterInputProvider(IInputProvider* provider);
-	double GetFps();
-	template<CpuType type> __forceinline void ProcessInstruction()
-	{
-		if(_debugger) {
-			_debugger->ProcessInstruction<type>();
-		}
-	}
-	template<CpuType type, uint8_t accessWidth = 1, MemoryAccessFlags flags = MemoryAccessFlags::None, typename T> __forceinline void ProcessMemoryRead(uint32_t addr, T& value, MemoryOperationType opType)
-	{
-		if(_debugger) {
-			_debugger->ProcessMemoryRead<type, accessWidth, flags>(addr, value, opType);
-		}
-	}
-	template<CpuType type, uint8_t accessWidth = 1, MemoryAccessFlags flags = MemoryAccessFlags::None, typename T> __forceinline bool ProcessMemoryWrite(uint32_t addr, T& value, MemoryOperationType opType)
-	{
-		if(_debugger) {
-			return _debugger->ProcessMemoryWrite<type, accessWidth, flags>(addr, value, opType);
-		}
-		return true;
-	}
-	template<CpuType cpuType, MemoryType memType, MemoryOperationType opType, typename T> __forceinline void ProcessMemoryAccess(uint32_t addr, T value)
-	{
-		if(_debugger) {
-			_debugger->ProcessMemoryAccess<cpuType, memType, opType, T>(addr, value);
-		}
-	}
-	template<CpuType type> __forceinline void ProcessIdleCycle()
-	{
-		if(_debugger) {
-			_debugger->ProcessIdleCycle<type>();
-		}
-	}
-	template<CpuType type> __forceinline void ProcessHaltedCpu()
-	{
-		if(_debugger) {
-			_debugger->ProcessHaltedCpu<type>();
-		}
-	}
-	template<CpuType type, typename T> __forceinline void ProcessPpuRead(uint32_t addr, T& value, MemoryType memoryType, MemoryOperationType opType = MemoryOperationType::Read)
-	{
-		if(_debugger) {
-			_debugger->ProcessPpuRead<type>(addr, value, memoryType, opType);
-		}
-	}
-	template<CpuType type, typename T> __forceinline void ProcessPpuWrite(uint32_t addr, T& value, MemoryType memoryType)
-	{
-		if(_debugger) {
-			_debugger->ProcessPpuWrite<type>(addr, value, memoryType);
-		}
-	}
-	template<CpuType type> __forceinline void ProcessPpuCycle()
-	{
-		if(_debugger) {
-			_debugger->ProcessPpuCycle<type>();
-		}
-	}
-	template<CpuType type> void ProcessInterrupt(uint32_t originalPc, uint32_t currentPc, bool forNmi)
-	{
-		if(_debugger) {
-			_debugger->ProcessInterrupt<type>(originalPc, currentPc, forNmi);
-		}
-	}
-	__forceinline void DebugLog(string log)
-	{
-		if(_debugger) {
-			_debugger->Log(log);
-		}
-	}
-	void ProcessEvent(EventType type, std::optional<CpuType> cpuType = std::nullopt);
-	template<CpuType cpuType> void AddDebugEvent(DebugEventType evtType);
-	void BreakIfDebugging(CpuType sourceCpu, BreakSource source);
-};
-enum class HashType
-{
-	Sha1,
-	Sha1Cheat
-};
-```
-
 ## File: Core/Shared/Interfaces/IKeyManager.h
 ```
 #pragma once
@@ -24154,6 +23131,460 @@ public:
 	static MousePosition GetMousePosition();
 	static void SetForceFeedback(uint16_t magnitude);
 	static void SetForceFeedback(uint16_t magnitudeRight, uint16_t magnitudeLeft);
+};
+```
+
+## File: Core/Shared/McpServer.cpp
+```cpp
+#include "pch.h"
+#include "Shared/McpServer.h"
+#include "Shared/Emulator.h"
+#include "Shared/BaseControlManager.h"
+#include "Shared/BaseControlDevice.h"
+#include "Shared/ControlDeviceState.h"
+#include "Shared/Interfaces/IConsole.h"
+#include "Shared/MessageManager.h"
+#include "Shared/MemoryType.h"
+#include "Shared/SettingTypes.h"
+#include "Shared/CpuType.h"
+#include "Shared/DebuggerRequest.h"
+#include "Debugger/Debugger.h"
+#include "Debugger/MemoryDumper.h"
+#include "Debugger/DebugTypes.h"
+#include "Utilities/Socket.h"
+#include "Utilities/VirtualFile.h"
+#include <sstream>
+#include <algorithm>
+std::string McpServer::ExtractString(const std::string& json, const std::string& key)
+{
+	std::string search = "\"" + key + "\"";
+	size_t pos = json.find(search);
+	if(pos == std::string::npos) return "";
+	pos = json.find(':', pos + search.size());
+	if(pos == std::string::npos) return "";
+	pos++;
+	while(pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
+	if(pos >= json.size() || json[pos] != '"') return "";
+	pos++;
+	std::string result;
+	while(pos < json.size() && json[pos] != '"') {
+		if(json[pos] == '\\' && pos + 1 < json.size()) {
+			pos++;
+			if(json[pos] == '"') result += '"';
+			else if(json[pos] == '\\') result += '\\';
+			else if(json[pos] == 'n') result += '\n';
+			else result += json[pos];
+		} else {
+			result += json[pos];
+		}
+		pos++;
+	}
+	return result;
+}
+int McpServer::ExtractInt(const std::string& json, const std::string& key, int defaultVal)
+{
+	std::string search = "\"" + key + "\"";
+	size_t pos = json.find(search);
+	if(pos == std::string::npos) return defaultVal;
+	pos = json.find(':', pos + search.size());
+	if(pos == std::string::npos) return defaultVal;
+	pos++;
+	while(pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
+	bool negative = false;
+	if(pos < json.size() && json[pos] == '-') { negative = true; pos++; }
+	int val = 0;
+	bool found = false;
+	while(pos < json.size() && json[pos] >= '0' && json[pos] <= '9') {
+		val = val * 10 + (json[pos] - '0');
+		found = true;
+		pos++;
+	}
+	if(!found) return defaultVal;
+	return negative ? -val : val;
+}
+std::string McpServer::OkResponse(int id, const std::string& resultJson)
+{
+	return "{\"ok\":true,\"result\":" + resultJson + ",\"id\":" + std::to_string(id) + "}";
+}
+std::string McpServer::ErrorResponse(int id, const std::string& error)
+{
+	// Escape quotes in error message
+	std::string escaped;
+	for(char c : error) {
+		if(c == '"') escaped += "\\\"";
+		else if(c == '\\') escaped += "\\\\";
+		else escaped += c;
+	}
+	return "{\"ok\":false,\"error\":\"" + escaped + "\",\"id\":" + std::to_string(id) + "}";
+}
+// ============================================================================
+// Constructor / Destructor
+// ============================================================================
+McpServer::McpServer(Emulator* emu, uint16_t port)
+	: _emu(emu), _port(port), _stop(false)
+{
+}
+McpServer::~McpServer()
+{
+	Stop();
+}
+// ============================================================================
+// Start / Stop
+// ============================================================================
+void McpServer::Start()
+{
+	if(_listenThread) return;
+	_stop = false;
+	_listenThread.reset(new std::thread(&McpServer::ListenLoop, this));
+}
+void McpServer::Stop()
+{
+	_stop = true;
+	if(_listener) _listener->Close();
+	if(_listenThread && _listenThread->joinable()) {
+		_listenThread->join();
+		_listenThread.reset();
+	}
+	_listener.reset();
+}
+// ============================================================================
+// TCP Listen Loop — runs on its own thread
+// ============================================================================
+void McpServer::ListenLoop()
+{
+	_listener.reset(new Socket());
+	_listener->Bind(_port);
+	_listener->Listen(1); // Single client
+	while(!_stop) {
+		std::unique_ptr<Socket> client = _listener->Accept();
+		if(!client->ConnectionError() && !_stop) {
+			HandleClient(std::move(client));
+		}
+	}
+}
+void McpServer::HandleClient(std::unique_ptr<Socket> client)
+{
+	// Request-per-connection model: handle exactly ONE request and close
+	std::string buffer;
+	char chunk[4096];
+	// Receive ONE request (up to first newline or 4KB max)
+	int received = client->Recv(chunk, sizeof(chunk) - 1, 0);
+	if(received <= 0) return;  // Connection closed or error
+	chunk[received] = '\0';
+	buffer += chunk;
+	size_t nlPos = buffer.find('\n');
+	if(nlPos == std::string::npos) {
+		std::string err = ErrorResponse(0, "incomplete request") + "\n";
+		client->Send((char*)err.c_str(), (int)err.size(), 0);
+		return;
+	}
+	std::string line = buffer.substr(0, nlPos);
+	if(!line.empty() && line.back() == '\r') line.pop_back();
+	if(line.empty()) {
+		std::string err = ErrorResponse(0, "empty request") + "\n";
+		client->Send((char*)err.c_str(), (int)err.size(), 0);
+		return;
+	}
+	auto cmd = ParseCommand(line);
+	if(!cmd) {
+		std::string err = ErrorResponse(0, "invalid command") + "\n";
+		client->Send((char*)err.c_str(), (int)err.size(), 0);
+		return;
+	}
+	{
+		std::lock_guard<std::mutex> lock(_queueMutex);
+		_commandQueue.push(cmd);
+	}
+	std::string response = cmd->WaitForResponse();
+	response += "\n";
+	client->Send((char*)response.c_str(), (int)response.size(), 0);
+}
+std::shared_ptr<McpTypedCommand> McpServer::ParseCommand(const std::string& json)
+{
+	std::string method = ExtractString(json, "method");
+	if(method.empty()) return nullptr;
+	auto cmd = std::make_shared<McpTypedCommand>();
+	cmd->id = ExtractInt(json, "id", 0);
+	if(method == "load_rom") {
+		cmd->type = McpCommandType::LoadRom;
+		cmd->path = ExtractString(json, "path");
+	} else if(method == "step_frame") {
+		cmd->type = McpCommandType::StepFrame;
+		cmd->count = ExtractInt(json, "count", 1);
+	} else if(method == "read_memory") {
+		cmd->type = McpCommandType::ReadMemory;
+		cmd->address = ExtractInt(json, "address", -1);
+		cmd->count = ExtractInt(json, "size", 1);
+	} else if(method == "write_memory") {
+		cmd->type = McpCommandType::WriteMemory;
+		cmd->address = ExtractInt(json, "address", -1);
+		cmd->value = ExtractInt(json, "value", -1);
+	} else if(method == "set_input") {
+		cmd->type = McpCommandType::SetInput;
+		cmd->port = ExtractInt(json, "port", 0);
+		cmd->buttons = ExtractInt(json, "buttons", 0);
+	} else if(method == "get_state") {
+		cmd->type = McpCommandType::GetState;
+	} else {
+		return nullptr;
+	}
+	return cmd;
+}
+void McpServer::DrainCommandQueue()
+{
+	while(true) {
+		std::shared_ptr<McpTypedCommand> cmd;
+		{
+			std::lock_guard<std::mutex> lock(_queueMutex);
+			if(_commandQueue.empty()) break;
+			cmd = _commandQueue.front();
+			_commandQueue.pop();
+		}
+		std::string response = ExecuteCommand(*cmd);
+		cmd->SetResponse(response);
+	}
+}
+std::string McpServer::ExecuteCommand(McpTypedCommand& cmd)
+{
+	switch(cmd.type) {
+		case McpCommandType::LoadRom: return ExecLoadRom(cmd);
+		case McpCommandType::StepFrame: return ExecStepFrame(cmd);
+		case McpCommandType::ReadMemory: return ExecReadMemory(cmd);
+		case McpCommandType::WriteMemory: return ExecWriteMemory(cmd);
+		case McpCommandType::SetInput: return ExecSetInput(cmd);
+		case McpCommandType::GetState: return ExecGetState(cmd);
+		default: return ErrorResponse(cmd.id, "unknown command type");
+	}
+}
+static MemoryType GetCpuMemoryType(ConsoleType ct)
+{
+	switch(ct) {
+		case ConsoleType::Nes: return MemoryType::NesMemory;
+		case ConsoleType::Snes: return MemoryType::SnesMemory;
+		case ConsoleType::Gameboy: return MemoryType::GameboyMemory;
+		case ConsoleType::PcEngine: return MemoryType::PceMemory;
+		case ConsoleType::Sms: return MemoryType::SmsMemory;
+		case ConsoleType::Gba: return MemoryType::GbaMemory;
+		default: return MemoryType::NesMemory;
+	}
+}
+static CpuType GetMainCpuType(ConsoleType ct)
+{
+	switch(ct) {
+		case ConsoleType::Nes: return CpuType::Nes;
+		case ConsoleType::Snes: return CpuType::Snes;
+		case ConsoleType::Gameboy: return CpuType::Gameboy;
+		case ConsoleType::PcEngine: return CpuType::Pce;
+		case ConsoleType::Gba: return CpuType::Gba;
+		default: return CpuType::Nes;
+	}
+}
+std::string McpServer::ExecLoadRom(McpTypedCommand& cmd)
+{
+	if(cmd.path.empty()) {
+		return ErrorResponse(cmd.id, "missing path");
+	}
+	if(_emu->IsRunning()) {
+		_emu->Stop(false, false, true);
+	}
+	bool loaded = _emu->LoadRom((VirtualFile)cmd.path, VirtualFile());
+	if(!loaded) {
+		_coreState.romLoaded = false;
+		_coreState.consoleType = -1;
+		_coreState.externalControl = false;
+		return ErrorResponse(cmd.id, "failed to load ROM");
+	}
+	ConsoleType ct = _emu->GetConsoleType();
+	_coreState.consoleType = (int)ct;
+	_coreState.romLoaded = true;
+	_coreState.externalControl = true;
+	std::ostringstream result;
+	result << "{\"console_type\":" << (int)ct
+	       << ",\"path\":\"";
+	for(char c : cmd.path) {
+		if(c == '\\') result << "\\\\";
+		else if(c == '"') result << "\\\"";
+		else result << c;
+	}
+	result << "\",\"mode\":\"external_controlled\"}";
+	MessageManager::Log("[MCP] ROM loaded: " + cmd.path + " (console=" + std::to_string((int)ct) + ")");
+	return OkResponse(cmd.id, result.str());
+}
+std::string McpServer::ExecStepFrame(McpTypedCommand& cmd)
+{
+	if(!_coreState.romLoaded) return ErrorResponse(cmd.id, "no ROM loaded");
+	int count = cmd.count;
+	if(count < 1) count = 1;
+	if(count > 3600) count = 3600;
+	IConsole* console = _emu->GetConsoleUnsafe();
+	if(!console) return ErrorResponse(cmd.id, "no active console");
+	for(int i = 0; i < count; i++) {
+		console->RunFrame();
+	}
+	uint32_t frameCount = _emu->GetFrameCount();
+	std::ostringstream result;
+	result << "{\"framesExecuted\":" << count << ",\"frameCount\":" << frameCount << "}";
+	return OkResponse(cmd.id, result.str());
+}
+std::string McpServer::ExecReadMemory(McpTypedCommand& cmd)
+{
+	if(!_coreState.romLoaded) return ErrorResponse(cmd.id, "no ROM loaded");
+	if(cmd.address < 0) return ErrorResponse(cmd.id, "invalid address");
+	MemoryType memType = GetCpuMemoryType((ConsoleType)_coreState.consoleType);
+	DebuggerRequest dbgRequest = _emu->GetDebugger(true);
+	Debugger* dbg = dbgRequest.GetDebugger();
+	if(!dbg) return ErrorResponse(cmd.id, "debugger not available");
+	int size = cmd.count;
+	if(size < 1) size = 1;
+	if(size > 256) size = 256;
+	if(size == 1) {
+		uint8_t val = dbg->GetMemoryDumper()->GetMemoryValue(memType, (uint32_t)cmd.address);
+		return OkResponse(cmd.id, "{\"value\":" + std::to_string(val) + "}");
+	}
+	std::vector<uint8_t> buf(size);
+	dbg->GetMemoryDumper()->GetMemoryValues(memType, (uint32_t)cmd.address, (uint32_t)(cmd.address + size - 1), buf.data());
+	std::ostringstream result;
+	result << "{\"address\":" << cmd.address << ",\"size\":" << size << ",\"data\":[";
+	for(int i = 0; i < size; i++) {
+		if(i > 0) result << ",";
+		result << (int)buf[i];
+	}
+	result << "]}";
+	return OkResponse(cmd.id, result.str());
+}
+std::string McpServer::ExecWriteMemory(McpTypedCommand& cmd)
+{
+	if(!_coreState.romLoaded) return ErrorResponse(cmd.id, "no ROM loaded");
+	if(cmd.address < 0) return ErrorResponse(cmd.id, "invalid address");
+	if(cmd.value < 0 || cmd.value > 255) return ErrorResponse(cmd.id, "value must be 0-255");
+	MemoryType memType = GetCpuMemoryType((ConsoleType)_coreState.consoleType);
+	DebuggerRequest dbgRequest = _emu->GetDebugger(true);
+	Debugger* dbg = dbgRequest.GetDebugger();
+	if(!dbg) return ErrorResponse(cmd.id, "debugger not available");
+	dbg->GetMemoryDumper()->SetMemoryValue(memType, (uint32_t)cmd.address, (uint8_t)cmd.value);
+	return OkResponse(cmd.id, "{\"address\":" + std::to_string(cmd.address) +
+	                          ",\"value\":" + std::to_string(cmd.value) + "}");
+}
+std::string McpServer::ExecSetInput(McpTypedCommand& cmd)
+{
+	if(!_coreState.romLoaded) return ErrorResponse(cmd.id, "no ROM loaded");
+	IConsole* console = _emu->GetConsoleUnsafe();
+	if(!console) return ErrorResponse(cmd.id, "no active console");
+	BaseControlManager* ctrlMgr = console->GetControlManager();
+	if(!ctrlMgr) return ErrorResponse(cmd.id, "no control manager");
+	shared_ptr<BaseControlDevice> controller = ctrlMgr->GetControlDevice(cmd.port, 0);
+	if(!controller) return ErrorResponse(cmd.id, "no controller on port " + std::to_string(cmd.port));
+	ControlDeviceState state;
+	state.State.push_back((uint8_t)(cmd.buttons & 0xFF));
+	controller->SetRawState(state);
+	return OkResponse(cmd.id, "{\"port\":" + std::to_string(cmd.port) +
+	                          ",\"buttons\":" + std::to_string(cmd.buttons) + "}");
+}
+std::string McpServer::ExecGetState(McpTypedCommand& cmd)
+{
+	std::ostringstream result;
+	result << "{\"rom_loaded\":" << (_coreState.romLoaded ? "true" : "false")
+	       << ",\"console_type\":" << _coreState.consoleType
+	       << ",\"mode\":\"" << (_coreState.externalControl ? "external_controlled" : "free_running") << "\"";
+	if(_coreState.romLoaded) {
+		result << ",\"frame_count\":" << _emu->GetFrameCount();
+		DebuggerRequest dbgRequest = _emu->GetDebugger(true);
+		Debugger* dbg = dbgRequest.GetDebugger();
+		if(dbg) {
+			CpuType cpuType = GetMainCpuType((ConsoleType)_coreState.consoleType);
+			uint32_t pc = dbg->GetProgramCounter(cpuType, false);
+			result << ",\"pc\":" << pc;
+		}
+	}
+	result << "}";
+	return OkResponse(cmd.id, result.str());
+}
+```
+
+## File: Core/Shared/McpServer.h
+```
+#pragma once
+#include "pch.h"
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <atomic>
+#include <string>
+#include <vector>
+class Emulator;
+class Socket;
+enum class McpCommandType {
+	LoadRom,
+	StepFrame,
+	ReadMemory,
+	WriteMemory,
+	SetInput,
+	GetState
+};
+struct McpTypedCommand {
+	McpCommandType type;
+	int id = 0;
+	std::string path;
+	int address = 0;
+	int value = 0;
+	int count = 1;
+	int port = 0;
+	int buttons = 0;
+	std::string response;
+	bool responseReady = false;
+	std::mutex mutex;
+	std::condition_variable cv;
+	void SetResponse(const std::string& resp) {
+		std::lock_guard<std::mutex> lock(mutex);
+		response = resp;
+		responseReady = true;
+		cv.notify_one();
+	}
+	std::string WaitForResponse() {
+		std::unique_lock<std::mutex> lock(mutex);
+		bool ok = cv.wait_for(lock, std::chrono::seconds(30), [this] { return responseReady; });
+		if(!ok) return "{\"ok\":false,\"error\":\"timeout\",\"id\":0}";
+		return response;
+	}
+};
+struct McpCoreState {
+	int consoleType = -1;
+	bool romLoaded = false;
+	bool externalControl = false;
+};
+class McpServer {
+private:
+	Emulator* _emu;
+	std::unique_ptr<std::thread> _listenThread;
+	std::unique_ptr<Socket> _listener;
+	std::atomic<bool> _stop;
+	uint16_t _port;
+	std::mutex _queueMutex;
+	std::queue<std::shared_ptr<McpTypedCommand>> _commandQueue;
+	McpCoreState _coreState;
+	void ListenLoop();
+	void HandleClient(std::unique_ptr<Socket> client);
+	std::shared_ptr<McpTypedCommand> ParseCommand(const std::string& json);
+	static std::string ExtractString(const std::string& json, const std::string& key);
+	static int ExtractInt(const std::string& json, const std::string& key, int defaultVal = 0);
+	std::string ExecuteCommand(McpTypedCommand& cmd);
+	std::string ExecLoadRom(McpTypedCommand& cmd);
+	std::string ExecStepFrame(McpTypedCommand& cmd);
+	std::string ExecReadMemory(McpTypedCommand& cmd);
+	std::string ExecWriteMemory(McpTypedCommand& cmd);
+	std::string ExecSetInput(McpTypedCommand& cmd);
+	std::string ExecGetState(McpTypedCommand& cmd);
+	static std::string OkResponse(int id, const std::string& resultJson);
+	static std::string ErrorResponse(int id, const std::string& error);
+public:
+	McpServer(Emulator* emu, uint16_t port = 12345);
+	~McpServer();
+	void Start();
+	void Stop();
+	void DrainCommandQueue();
+	bool IsExternalControlled() const { return _coreState.externalControl; }
+	McpCoreState& GetCoreState() { return _coreState; }
 };
 ```
 
@@ -24762,1010 +24193,363 @@ uint32_t SaveStateManager::ReadValue(istream& stream)
 }
 ```
 
-## File: README.md
-```markdown
-# Mesen
-
-Mesen is a multi-system emulator (NES, SNES, Game Boy, Game Boy Advance, PC Engine, SMS/Game Gear, WonderSwan) for Windows, Linux and macOS.  
-
-## Releases
-
-The latest stable version is available from the [releases on GitHub](https://github.com/SourMesen/Mesen2/releases).  
-
-## Development Builds
-
-[![Mesen](https://github.com/SourMesen/Mesen2/actions/workflows/build.yml/badge.svg)](https://github.com/SourMesen/Mesen2/actions/workflows/build.yml)
-
-#### <ins>Native builds</ins> (recommended) ####
-
-These builds don't require .NET to be installed.  
-
-* [Windows 10 / 11](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20%28Windows%20-%20net8.0%20-%20AoT%29.zip)  
-* [Linux x64](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20%28Linux%20-%20ubuntu-22.04%20-%20clang_aot%29.zip)  (requires **SDL2**)
-* [macOS - Intel](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20%28macOS%20-%20macos-13%20-%20clang_aot%29.zip)  (requires **SDL2**)
-* [macOS - Apple Silicon](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20%28macOS%20-%20macos-14%20-%20clang_aot%29.zip)  (requires **SDL2**)
-
-#### <ins>.NET builds</ins> ####
-
-These builds require **.NET 8** to be installed (except the Windows 7 build which requires .NET 6).  
-For Linux and macOS, **SDL2** must also be installed.
-
-* [Windows 7 / 8 (.NET 6)](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20%28Windows%20-%20net6.0%29.zip)  
-* [Linux x64 - AppImage](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20(Linux%20x64%20-%20AppImage).zip)  
-* [Linux ARM64](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20%28Linux%20-%20ubuntu-22.04-arm%20-%20clang%29.zip)  
-* [Linux ARM64 - AppImage](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20(Linux%20ARM64%20-%20AppImage).zip)
-
-
-#### <ins>Notes</ins> ####
-
-Other builds are also available in the [Actions](https://github.com/SourMesen/Mesen2/actions) tab.
-
-**SteamOS**: See [SteamOS.md](SteamOS.md)
-
-## Compiling
-
-See [COMPILING.md](COMPILING.md)
-
-## License
-
-Mesen is available under the GPL V3 license.  Full text here: <http://www.gnu.org/licenses/gpl-3.0.en.html>
-
-Copyright (C) 2014-2025 Sour
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <http://www.gnu.org/licenses/>.
+## File: repomix.config.json
+```json
+{
+  "$schema": "https://repomix.com/schemas/latest/schema.json",
+  "input": {
+    "maxFileSize": 52428800
+  },
+  "output": {
+    "filePath": "repomix-output.md",
+    "style": "markdown",
+    "parsableStyle": true,
+    "fileSummary": true,
+    "directoryStructure": true,
+    "files": true,
+    "removeComments": true,
+    "removeEmptyLines": true,
+    "compress": false,
+    "topFilesLength": 10,
+    "showLineNumbers": false,
+    "truncateBase64": false,
+    "copyToClipboard": false,
+    "includeFullDirectoryStructure": false,
+    "tokenCountTree": false,
+    "headerText": "CONTEXTO DE INFRAESTRUCTURA MCP:\nEste repositorio (Mesen2) actúa como el motor de emulación. El control programático, la lectura de memoria y la interacción con LLMs se gestionan mediante el repositorio paralelo 'mesen-mcp-infra'.\nLos puntos de entrada clave para el control externo en este repositorio son InteropDLL y Core/Debugger.",
+    "git": {
+      "sortByChanges": true,
+      "sortByChangesMaxCommits": 100,
+      "includeDiffs": false,
+      "includeLogs": false,
+      "includeLogsCount": 50
+    }
+  },
+  "ignore": {
+    "useGitignore": true,
+    "useDotIgnore": true,
+    "useDefaultPatterns": true,
+    "customPatterns": [
+      "**/repomix-output.*",
+      "**/bin/**",
+      "**/obj/**",
+      "**/*.pdb",
+      "**/*.lib",
+      "**/*.dll",
+      "**/*.zip",
+      "**/*.exe",
+      "**/*.vcxproj*",
+      "**/*.filters",
+      "**/*.user",
+      "**/*.sln",
+      "**/Localization/**",
+      "UI/**",
+      "SevenZip/**",
+      "Lua/**",
+      "Utilities/**",
+      "Linux/**",
+      "MacOS/**",
+      "Windows/**",
+      "Sdl/**",
+      "PGOHelper/**",
+      "Core/NES/**",
+      "Core/SNES/**",
+      "Core/Gameboy/**",
+      "Core/GBA/**",
+      "Core/PCE/**",
+      "Core/SMS/**",
+      "Core/WS/**"
+    ]
+  },
+  "security": {
+    "enableSecurityCheck": true
+  },
+  "tokenCount": {
+    "encoding": "o200k_base"
+  }
+}
 ```
 
-## File: Core/Shared/Emulator.cpp
-```cpp
+## File: Core/Shared/Emulator.h
+```
+#pragma once
 #include "pch.h"
-#include <assert.h>
-#include "Shared/Emulator.h"
-#include "Shared/NotificationManager.h"
-#include "Shared/Audio/SoundMixer.h"
-#include "Shared/Audio/AudioPlayerHud.h"
-#include "Shared/Video/VideoDecoder.h"
-#include "Shared/Video/VideoRenderer.h"
-#include "Shared/Video/DebugHud.h"
-#include "Shared/FrameLimiter.h"
-#include "Shared/MessageManager.h"
-#include "Shared/KeyManager.h"
-#include "Shared/EmuSettings.h"
-#include "Shared/SaveStateManager.h"
-#include "Shared/Video/DebugStats.h"
-#include "Shared/RewindManager.h"
-#include "Shared/ShortcutKeyHandler.h"
-#include "Shared/EmulatorLock.h"
-#include "Shared/DebuggerRequest.h"
-#include "Shared/Movies/MovieManager.h"
-#include "Shared/BatteryManager.h"
-#include "Shared/CheatManager.h"
-#include "Shared/SystemActionManager.h"
-#include "Shared/TimingInfo.h"
-#include "Shared/HistoryViewer.h"
-#include "Netplay/GameServer.h"
-#include "Netplay/GameClient.h"
-#include "Shared/McpServer.h"
-#include "Shared/Interfaces/IConsole.h"
-#include "Shared/Interfaces/IBarcodeReader.h"
-#include "Shared/Interfaces/ITapeRecorder.h"
-#include "Shared/BaseControlManager.h"
-#include "SNES/SnesConsole.h"
-#include "SNES/SnesDefaultVideoFilter.h"
-#include "NES/NesConsole.h"
-#include "Gameboy/Gameboy.h"
-#include "PCE/PceConsole.h"
-#include "SMS/SmsConsole.h"
-#include "GBA/GbaConsole.h"
-#include "WS/WsConsole.h"
-#include "Debugger/Debugger.h"
-#include "Debugger/BaseEventManager.h"
-#include "Debugger/DebugTypes.h"
-#include "Debugger/DebugUtilities.h"
-#include "Utilities/Serializer.h"
+#include "Core/Debugger/DebugTypes.h"
+#include "Core/Debugger/Debugger.h"
+#include "Core/Debugger/DebugUtilities.h"
+#include "Core/Shared/EmulatorLock.h"
+#include "Core/Shared/Interfaces/IConsole.h"
+#include "Core/Shared/Audio/AudioPlayerTypes.h"
 #include "Utilities/Timer.h"
+#include "Utilities/safe_ptr.h"
+#include "Utilities/SimpleLock.h"
 #include "Utilities/VirtualFile.h"
-#include "Utilities/PlatformUtilities.h"
-#include "Utilities/FolderUtilities.h"
-#include "Shared/MemoryOperationType.h"
-#include "Shared/EventType.h"
-Emulator::Emulator() :
-	_settings(new EmuSettings(this)),
-	_debugHud(new DebugHud()),
-	_scriptHud(new DebugHud()),
-	_notificationManager(new NotificationManager()),
-	_batteryManager(new BatteryManager()),
-	_soundMixer(new SoundMixer(this)),
-	_videoRenderer(new VideoRenderer(this)),
-	_videoDecoder(new VideoDecoder(this)),
-	_saveStateManager(new SaveStateManager(this)),
-	_cheatManager(new CheatManager(this)),
-	_movieManager(new MovieManager(this)),
-	_historyViewer(new HistoryViewer(this)),
-	_gameServer(new GameServer(this)),
-	_gameClient(new GameClient(this)),
-	_rewindManager(new RewindManager(this))
-{
-	_paused = false;
-	_pauseOnNextFrame = false;
-	_stopFlag = false;
-	_isRunAheadFrame = false;
-	_lockCounter = 0;
-	_threadPaused = false;
-	_debugRequestCount = 0;
-	_blockDebuggerRequestCount = 0;
-	_videoDecoder->Init();
-}
-Emulator::~Emulator()
-{
-}
-void Emulator::Initialize(bool enableShortcuts)
-{
-	_systemActionManager.reset(new SystemActionManager(this));
-	if(enableShortcuts) {
-		_shortcutKeyHandler.reset(new ShortcutKeyHandler(this));
-		_notificationManager->RegisterNotificationListener(_shortcutKeyHandler);
-	}
-	_videoDecoder->StartThread();
-	_videoRenderer->StartThread();
-	if(!_mcpServer) {
-		_mcpServer.reset(new McpServer(this, 12345));
-		_mcpServer->Start();
-	}
-}
-void Emulator::Release()
-{
-	Stop(true);
-	_gameClient->Disconnect();
-	_gameServer->StopServer();
-	if(_mcpServer) {
-		_mcpServer->Stop();
-		_mcpServer.reset();
-	}
-	_videoDecoder->StopThread();
-	_videoRenderer->StopThread();
-	_shortcutKeyHandler.reset();
-}
-void Emulator::Run()
-{
-	if(!_console) {
-		return;
-	}
-	while(!_runLock.TryAcquire(50)) {
-		if(_stopFlag) {
-			return;
-		}
-	}
-	_stopFlag = false;
-	_isRunAheadFrame = false;
-	PlatformUtilities::EnableHighResolutionTimer();
-	PlatformUtilities::DisableScreensaver();
-	_emulationThreadId = std::this_thread::get_id();
-	_frameDelay = GetFrameDelay();
-	_stats.reset(new DebugStats());
-	_frameLimiter.reset(new FrameLimiter(_frameDelay));
-	_lastFrameTimer.Reset();
-	while(!_stopFlag) {
-		if(_mcpServer) {
-			_mcpServer->DrainCommandQueue();
-		}
-		if(_mcpServer && _mcpServer->IsExternalControlled()) {
-			std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(1));
-		} else {
-			bool useRunAhead = _settings->GetEmulationConfig().RunAheadFrames > 0 && !_debugger && !_audioPlayerHud && !_rewindManager->IsRewinding() && _settings->GetEmulationSpeed() > 0 && _settings->GetEmulationSpeed() <= 100;
-			if(useRunAhead) {
-				RunFrameWithRunAhead();
-			} else {
-				_console->RunFrame();
-				_rewindManager->ProcessEndOfFrame();
-				_historyViewer->ProcessEndOfFrame();
-				ProcessSystemActions();
-			}
-			ProcessAutoSaveState();
-		}
-		WaitForLock();
-		if(_pauseOnNextFrame) {
-			_pauseOnNextFrame = false;
-			_paused = true;
-		}
-		if(_paused && !_stopFlag && !_debugger) {
-			WaitForPauseEnd();
-		}
-	}
-	_emulationThreadId = thread::id();
-	if(_runLock.IsLockedByCurrentThread()) {
-		_runLock.Release();
-	}
-	PlatformUtilities::EnableScreensaver();
-	PlatformUtilities::RestoreTimerResolution();
-}
-void Emulator::ProcessAutoSaveState()
-{
-	if(_autoSaveStateFrameCounter > 0) {
-		_autoSaveStateFrameCounter--;
-		if(_autoSaveStateFrameCounter == 0) {
-			_saveStateManager->SaveState(SaveStateManager::AutoSaveStateIndex, false);
-		}
-	} else {
-		uint32_t saveStateDelay = _settings->GetPreferences().AutoSaveStateDelay;
-		if(saveStateDelay > 0) {
-			_autoSaveStateFrameCounter = (uint32_t)(GetFps() * saveStateDelay * 60);
-		}
-	}
-}
-bool Emulator::ProcessSystemActions()
-{
-	if(_systemActionManager->IsResetPressed()) {
-		Reset();
-		shared_ptr<Debugger> debugger = _debugger.lock();
-		if(debugger) {
-			debugger->ResetSuspendCounter();
-		}
-		return true;
-	} else if(_systemActionManager->IsPowerCyclePressed()) {
-		PowerCycle();
-		return true;
-	}
-	return false;
-}
-void Emulator::RunFrameWithRunAhead()
-{
-	stringstream runAheadState;
-	uint32_t frameCount = _settings->GetEmulationConfig().RunAheadFrames;
-	_isRunAheadFrame = true;
-	_console->RunFrame();
-	Serialize(runAheadState, false, 0);
-	while(frameCount > 1) {
-		frameCount--;
-		_console->RunFrame();
-	}
-	_isRunAheadFrame = false;
-	_console->RunFrame();
-	_rewindManager->ProcessEndOfFrame();
-	_historyViewer->ProcessEndOfFrame();
-	bool wasReset = ProcessSystemActions();
-	if(!wasReset) {
-		_isRunAheadFrame = true;
-		Deserialize(runAheadState, SaveStateManager::FileFormatVersion, false);
-		_isRunAheadFrame = false;
-	}
-}
-void Emulator::OnBeforeSendFrame()
-{
-	if(!_isRunAheadFrame) {
-		if(_audioPlayerHud) {
-			_audioPlayerHud->Draw(GetFrameCount(), GetFps());
-		}
-		if(_stats && _settings->GetPreferences().ShowDebugInfo) {
-			double lastFrameTime = _lastFrameTimer.GetElapsedMS();
-			_lastFrameTimer.Reset();
-			_stats->DisplayStats(this, lastFrameTime);
-		}
-	}
-}
-void Emulator::ProcessEndOfFrame()
-{
-	if(!_isRunAheadFrame) {
-		_frameLimiter->ProcessFrame();
-		while(_frameLimiter->WaitForNextFrame()) {
-			if(_stopFlag || _frameDelay != GetFrameDelay() || _paused || _pauseOnNextFrame || _lockCounter > 0) {
-				break;
-			}
-		}
-		double newFrameDelay = GetFrameDelay();
-		if(newFrameDelay != _frameDelay) {
-			_frameDelay = newFrameDelay;
-			_frameLimiter->SetDelay(_frameDelay);
-		}
-		_console->GetControlManager()->ProcessEndOfFrame();
-	}
-	_frameRunning = false;
-}
-void Emulator::Stop(bool sendNotification, bool preventRecentGameSave, bool saveBattery)
-{
-	BlockDebuggerRequests();
-	_stopFlag = true;
-	_notificationManager->SendNotification(ConsoleNotificationType::BeforeGameUnload);
-	ResetDebugger();
-	if(_emuThread) {
-		_emuThread->join();
-		_emuThread.release();
-	}
-	if(_console && saveBattery) {
-		_console->SaveBattery();
-	}
-	if(!preventRecentGameSave && _console && !_settings->GetPreferences().DisableGameSelectionScreen && !_audioPlayerHud) {
-		RomInfo romInfo = GetRomInfo();
-		_saveStateManager->SaveRecentGame(romInfo.RomFile.GetFileName(), romInfo.RomFile, romInfo.PatchFile);
-	}
-	if(sendNotification) {
-		_notificationManager->SendNotification(ConsoleNotificationType::BeforeEmulationStop);
-	}
-	_movieManager->Stop();
-	_videoDecoder->StopThread();
-	_rewindManager->Reset();
-	if(_console) {
-		_console.reset();
-	}
-	OnBeforePause(true);
-	if(sendNotification) {
-		_notificationManager->SendNotification(ConsoleNotificationType::EmulationStopped);
-	}
-	_blockDebuggerRequestCount--;
-}
-void Emulator::Reset()
-{
-	Lock();
-	_console->Reset();
-	_systemActionManager->ResetState();
-	_console->GetControlManager()->UpdateInputState();
-	_console->GetControlManager()->ResetLagCounter();
-	_videoRenderer->ClearFrame();
-	_notificationManager->SendNotification(ConsoleNotificationType::GameReset);
-	ProcessEvent(EventType::Reset);
-	Unlock();
-}
-void Emulator::ReloadRom(bool forPowerCycle)
-{
-	RomInfo info = GetRomInfo();
-	if(!LoadRom((string)info.RomFile, (string)info.PatchFile, !forPowerCycle, forPowerCycle)) {
-		if(forPowerCycle) {
-			_systemActionManager->ResetState();
-			SuspendDebugger(true);
-		}
-	}
-}
-void Emulator::PowerCycle()
-{
-	ReloadRom(true);
-}
-bool Emulator::LoadRom(VirtualFile romFile, VirtualFile patchFile, bool stopRom, bool forPowerCycle)
-{
-	bool result = false;
-	try {
-		result = InternalLoadRom(romFile, patchFile, stopRom, forPowerCycle);
-	} catch(std::exception& ex) {
-		_videoDecoder->StartThread();
-		_videoRenderer->StartThread();
-		MessageManager::DisplayMessage("Error", "UnexpectedError", ex.what());
-		Stop(false, true, false);
-	}
-	if(!result) {
-		_notificationManager->SendNotification(ConsoleNotificationType::GameLoadFailed);
-	}
-	return result;
-}
-bool Emulator::InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool stopRom, bool forPowerCycle)
-{
-	if(!romFile.IsValid()) {
-		MessageManager::DisplayMessage("Error", "CouldNotLoadFile", romFile.GetFileName());
-		return false;
-	}
-	if(IsEmulationThread()) {
-		_threadPaused = true;
-	}
-	BlockDebuggerRequests();
-	auto emuLock = AcquireLock();
-	auto dbgLock = _debuggerLock.AcquireSafe();
-	auto lock = _loadLock.AcquireSafe();
-	_notificationManager->SendNotification(ConsoleNotificationType::BeforeGameLoad);
-	bool wasPaused = IsPaused();
-	shared_ptr<Debugger> debugger = _debugger.lock();
-	bool debuggerActive = debugger != nullptr;
-	ResetDebugger();
-	if(patchFile.IsValid()) {
-		if(romFile.ApplyPatch(patchFile)) {
-			MessageManager::DisplayMessage("Patch", "ApplyingPatch", patchFile.GetFileName());
-		} else {
-			MessageManager::DisplayMessage("Patch", "PatchFailed", patchFile.GetFileName());
-		}
-	}
-	if(_console) {
-		_console->SaveBattery();
-	}
-	_soundMixer->StopAudio();
-	if(!forPowerCycle) {
-		_movieManager->Stop();
-	}
-	ConsoleMemoryInfo originalConsoleMemory[DebugUtilities::GetMemoryTypeCount()] = {};
-	memcpy(originalConsoleMemory, _consoleMemory, sizeof(_consoleMemory));
-	unique_ptr<IConsole> console;
-	LoadRomResult result = LoadRomResult::UnknownType;
-	TryLoadRom(romFile, result, console, false);
-	TryLoadRom(romFile, result, console, true);
-	if(result != LoadRomResult::Success) {
-		MessageManager::DisplayMessage("Error", "CouldNotLoadFile", romFile.GetFileName());
-		if(debugger) {
-			_debugger.reset(debugger);
-			debugger->ResetSuspendCounter();
-		}
-		_blockDebuggerRequestCount--;
-		return false;
-	}
-	if(debugger) {
-		debugger->Release();
-		debugger.reset();
-	}
-	if(stopRom) {
-		bool gameChanged = (string)_rom.RomFile != (string)romFile || (string)_rom.PatchFile != (string)patchFile;
-		Stop(false, !gameChanged, false);
-		memset(originalConsoleMemory, 0, sizeof(originalConsoleMemory));
-	}
-	_videoDecoder->StopThread();
-	_videoRenderer->StopThread();
-	_rom.RomFile = (string)romFile;
-	_rom.PatchFile = (string)patchFile;
-	_rom.Format = console->GetRomFormat();
-	_rom.DipSwitches = console->GetDipSwitchInfo();
-	if(_rom.Format == RomFormat::Spc || _rom.Format == RomFormat::Nsf || _rom.Format == RomFormat::Gbs || _rom.Format == RomFormat::PceHes) {
-		_audioPlayerHud.reset(new AudioPlayerHud(this));
-	} else {
-		_audioPlayerHud.reset();
-	}
-	_cheatManager->ClearCheats(false);
-	uint32_t pollCounter = 0;
-	if(forPowerCycle && console->GetControlManager()) {
-		pollCounter = console->GetControlManager()->GetPollCounter();
-	}
-	InitConsole(console, originalConsoleMemory, forPowerCycle);
-	_console->GetControlManager()->SetPollCounter(pollCounter);
-	_rewindManager->InitHistory();
-	if(debuggerActive || _settings->CheckFlag(EmulationFlags::ConsoleMode)) {
-		InitDebugger();
-	}
-	_notificationManager->RegisterNotificationListener(_rewindManager);
-	_systemActionManager->ResetState();
-	_console->GetControlManager()->UpdateControlDevices();
-	_console->GetControlManager()->UpdateInputState();
-	_autoSaveStateFrameCounter = 0;
-	_blockDebuggerRequestCount--;
-	dbgLock.Release();
-	_threadPaused = true;
-	bool needPause = wasPaused && _debugger;
-	if(needPause) {
-		_debugger->Step(GetCpuTypes()[0], 1, StepType::Step, BreakSource::Pause);
-	}
-	GameLoadedEventParams params = { needPause, forPowerCycle };
-	_notificationManager->SendNotification(ConsoleNotificationType::GameLoaded, &params);
-	_threadPaused = false;
-	if(!forPowerCycle && !_audioPlayerHud) {
-		ConsoleRegion region = _console->GetRegion();
-		string modelName = region == ConsoleRegion::Pal ? "PAL" : (region == ConsoleRegion::Dendy ? "Dendy" : "NTSC");
-		MessageManager::DisplayMessage(modelName, FolderUtilities::GetFilename(GetRomInfo().RomFile.GetFileName(), false));
-	}
-	_videoDecoder->StartThread();
-	_videoRenderer->StartThread();
-	if(stopRom) {
-		_stopFlag = false;
-		_emuThread.reset(new thread(&Emulator::Run, this));
-	}
-	return true;
-}
-void Emulator::InitConsole(unique_ptr<IConsole>& newConsole, ConsoleMemoryInfo originalConsoleMemory[], bool preserveRom)
-{
-	if(preserveRom && _console) {
-		magic_enum::enum_for_each<MemoryType>([&](MemoryType memType) {
-			if(DebugUtilities::IsRom(memType)) {
-				uint32_t orgSize = originalConsoleMemory[(int)memType].Size;
-				if(orgSize > 0 && GetMemory(memType).Size == orgSize) {
-					memcpy(_consoleMemory[(int)memType].Memory, originalConsoleMemory[(int)memType].Memory, orgSize);
-				}
-			}
-		});
-	}
-	_console.reset(newConsole);
-	_consoleType = _console->GetConsoleType();
-	_notificationManager->RegisterNotificationListener(_console.lock());
-}
-void Emulator::TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_ptr<IConsole>& console, bool useFileSignature)
-{
-	TryLoadRom<NesConsole>(romFile, result, console, useFileSignature);
-	TryLoadRom<SnesConsole>(romFile, result, console, useFileSignature);
-	TryLoadRom<Gameboy>(romFile, result, console, useFileSignature);
-	TryLoadRom<PceConsole>(romFile, result, console, useFileSignature);
-	TryLoadRom<SmsConsole>(romFile, result, console, useFileSignature);
-	TryLoadRom<GbaConsole>(romFile, result, console, useFileSignature);
-	TryLoadRom<WsConsole>(romFile, result, console, useFileSignature);
-}
-template<typename T>
-void Emulator::TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_ptr<IConsole>& console, bool useFileSignature)
-{
-	if(result == LoadRomResult::UnknownType) {
-		string romExt = romFile.GetFileExtension();
-		vector<string> extensions = T::GetSupportedExtensions();
-		if(std::find(extensions.begin(), extensions.end(), romExt) != extensions.end() || (useFileSignature && romFile.CheckFileSignature(T::GetSupportedSignatures()))) {
-			ConsoleMemoryInfo consoleMemory[DebugUtilities::GetMemoryTypeCount()] = {};
-			memcpy(consoleMemory, _consoleMemory, sizeof(_consoleMemory));
-			memset(_consoleMemory, 0, sizeof(_consoleMemory));
-			bool hasBattery = _batteryManager->HasBattery();
-			_batteryManager->Initialize(FolderUtilities::GetFilename(romFile.GetFileName(), false));
-			console.reset(new T(this));
-			result = console->LoadRom(romFile);
-			if(result != LoadRomResult::Success) {
-				memcpy(_consoleMemory, consoleMemory, sizeof(_consoleMemory));
-				_batteryManager->Initialize(FolderUtilities::GetFilename(_rom.RomFile.GetFileName(), false), hasBattery);
-			}
-		}
-	}
-}
-string Emulator::GetHash(HashType type)
-{
-	shared_ptr<IConsole> console = _console.lock();
-	string hash = console->GetHash(type);
-	if(hash.size()) {
-		return hash;
-	} else if(type == HashType::Sha1) {
-		return _rom.RomFile.GetSha1Hash();
-	} else if(type == HashType::Sha1Cheat) {
-		return _rom.RomFile.GetSha1Hash();
-	}
-	return "";
-}
-uint32_t Emulator::GetCrc32()
-{
-	return _rom.RomFile.GetCrc32();
-}
-PpuFrameInfo Emulator::GetPpuFrame()
-{
-	shared_ptr<IConsole> console = GetConsole();
-	return console ? console->GetPpuFrame() : PpuFrameInfo {};
-}
-ConsoleRegion Emulator::GetRegion()
-{
-	shared_ptr<IConsole> console = GetConsole();
-	return console ? console->GetRegion() : ConsoleRegion::Ntsc;
-}
-shared_ptr<IConsole> Emulator::GetConsole()
-{
-	return _console.lock();
-}
-IConsole* Emulator::GetConsoleUnsafe()
-{
-#ifdef _DEBUG
-	if(!IsEmulationThread()) {
-		throw std::runtime_error("GetConsoleUnsafe should only be called from the emulation thread");
-	}
-#endif
-	return _console.get();
-}
-ConsoleType Emulator::GetConsoleType()
-{
-	return _consoleType;
-}
-vector<CpuType> Emulator::GetCpuTypes()
-{
-	shared_ptr<IConsole> console = GetConsole();
-	return console ? console->GetCpuTypes() : vector<CpuType>{};
-}
-TimingInfo Emulator::GetTimingInfo(CpuType cpuType)
-{
-	shared_ptr<IConsole> console = GetConsole();
-	return console ? console->GetTimingInfo(cpuType) : TimingInfo {};
-}
-uint64_t Emulator::GetMasterClock()
-{
-#if DEBUG
-	if(!IsEmulationThread()) {
-		throw std::runtime_error("called on wrong thread");
-	}
-#endif
-	return _console->GetMasterClock();
-}
-uint32_t Emulator::GetMasterClockRate()
-{
-#if DEBUG
-	if(!IsEmulationThread()) {
-		throw std::runtime_error("called on wrong thread");
-	}
-#endif
-	return _console->GetMasterClockRate();
-}
-uint32_t Emulator::GetFrameCount()
-{
-	return GetPpuFrame().FrameCount;
-}
-uint32_t Emulator::GetLagCounter()
-{
-	shared_ptr<IConsole> console = GetConsole();
-	return console ? console->GetControlManager()->GetLagCounter() : 0;
-}
-void Emulator::ResetLagCounter()
-{
-	shared_ptr<IConsole> console = GetConsole();
-	if(console) {
-		console->GetControlManager()->ResetLagCounter();
-	}
-}
-bool Emulator::HasControlDevice(ControllerType type)
-{
-	shared_ptr<IConsole> console = GetConsole();
-	return console ? console->GetControlManager()->HasControlDevice(type) : false;
-}
-void Emulator::RegisterInputRecorder(IInputRecorder* recorder)
-{
-	shared_ptr<IConsole> console = GetConsole();
-	if(console) {
-		console->GetControlManager()->RegisterInputRecorder(recorder);
-	}
-}
-void Emulator::UnregisterInputRecorder(IInputRecorder* recorder)
-{
-	shared_ptr<IConsole> console = GetConsole();
-	if(console) {
-		console->GetControlManager()->UnregisterInputRecorder(recorder);
-	}
-}
-void Emulator::RegisterInputProvider(IInputProvider* provider)
-{
-	shared_ptr<IConsole> console = GetConsole();
-	if(console) {
-		console->GetControlManager()->RegisterInputProvider(provider);
-	}
-}
-void Emulator::UnregisterInputProvider(IInputProvider* provider)
-{
-	shared_ptr<IConsole> console = GetConsole();
-	if(console) {
-		console->GetControlManager()->UnregisterInputProvider(provider);
-	}
-}
-double Emulator::GetFps()
-{
-	shared_ptr<IConsole> console = GetConsole();
-	double fps = console ? console->GetFps() : 60.0;
-	if(_settings->GetVideoConfig().IntegerFpsMode) {
-		fps = std::round(fps);
-	}
-	return fps;
-}
-double Emulator::GetFrameDelay()
-{
-	uint32_t emulationSpeed = _settings->GetEmulationSpeed();
-	double frameDelay;
-	if(emulationSpeed == 0) {
-		frameDelay = 0;
-	} else {
-		frameDelay = 1000 / GetFps();
-		frameDelay /= (emulationSpeed / 100.0);
-	}
-	return frameDelay;
-}
-void Emulator::PauseOnNextFrame()
-{
-	shared_ptr<Debugger> debugger = _debugger.lock();
-	if(debugger) {
-		debugger->PauseOnNextFrame();
-	} else {
-		_pauseOnNextFrame = true;
-		_paused = false;
-	}
-}
-void Emulator::Pause()
-{
-	shared_ptr<Debugger> debugger = _debugger.lock();
-	if(debugger) {
-		debugger->Step(GetCpuTypes()[0], 1, StepType::Step, BreakSource::Pause);
-	} else {
-		_paused = true;
-	}
-}
-void Emulator::Resume()
-{
-	shared_ptr<Debugger> debugger = _debugger.lock();
-	if(debugger) {
-		debugger->Run();
-	} else {
-		_paused = false;
-	}
-}
-bool Emulator::IsPaused()
-{
-	shared_ptr<Debugger> debugger = _debugger.lock();
-	if(debugger) {
-		return debugger->IsPaused();
-	} else {
-		return _paused;
-	}
-}
-void Emulator::OnBeforePause(bool clearAudioBuffer)
-{
-	_soundMixer->StopAudio(clearAudioBuffer);
-	KeyManager::SetForceFeedback(0);
-}
-void Emulator::WaitForPauseEnd()
-{
-	_notificationManager->SendNotification(ConsoleNotificationType::GamePaused);
-	OnBeforePause(false);
-	_runLock.Release();
-	PlatformUtilities::EnableScreensaver();
-	PlatformUtilities::RestoreTimerResolution();
-	while(_paused && !_rewindManager->IsRewinding() && !_stopFlag && !_debugger) {
-		std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(30));
-		if(_systemActionManager->IsResetPending()) {
-			break;
-		}
-	}
-	PlatformUtilities::DisableScreensaver();
-	PlatformUtilities::EnableHighResolutionTimer();
-	while(!_stopFlag && !_runLock.TryAcquire(50)) { }
-	if(!_stopFlag) {
-		_notificationManager->SendNotification(ConsoleNotificationType::GameResumed);
-	}
-}
-EmulatorLock Emulator::AcquireLock(bool allowDebuggerLock)
-{
-	return EmulatorLock(this, allowDebuggerLock);
-}
-void Emulator::Lock()
-{
-	SuspendDebugger(false);
-	_lockCounter++;
-	_runLock.Acquire();
-}
-void Emulator::Unlock()
-{
-	SuspendDebugger(true);
-	_runLock.Release();
-	_lockCounter--;
-}
-bool Emulator::IsThreadPaused()
-{
-	return !_emuThread || _threadPaused;
-}
-void Emulator::SuspendDebugger(bool release)
-{
-	shared_ptr<Debugger> debugger = _debugger.lock();
-	if(debugger) {
-		debugger->SuspendDebugger(release);
-	}
-}
-void Emulator::WaitForLock()
-{
-	if(_lockCounter > 0) {
-		_runLock.Release();
-		_threadPaused = true;
-		while(_lockCounter > 0 && !_stopFlag) {}
-		shared_ptr<Debugger> debugger = _debugger.lock();
-		if(debugger) {
-			while(debugger->HasBreakRequest() && !_stopFlag) {}
-		}
-		if(!_stopFlag) {
-			_threadPaused = false;
-			_runLock.Acquire();
-		}
-	}
-}
-void Emulator::Serialize(ostream& out, bool includeSettings, int compressionLevel)
-{
-	Serializer s(SaveStateManager::FileFormatVersion, true);
-	if(includeSettings) {
-		SV(_settings);
-	}
-	s.Stream(_console, "");
-	s.SaveTo(out, compressionLevel);
-}
-DeserializeResult Emulator::Deserialize(istream& in, uint32_t fileFormatVersion, bool includeSettings, optional<ConsoleType> srcConsoleType, bool sendNotification)
-{
-	Serializer s(fileFormatVersion, false);
-	if(!s.LoadFrom(in)) {
-		return DeserializeResult::InvalidFile;
-	}
-	if(includeSettings) {
-		SV(_settings);
-	}
-	if(srcConsoleType.has_value() && srcConsoleType.value() != _console->GetConsoleType()) {
-		//Used to allow save states taken on GB/GBC/SGB to be loaded on any of the 3 systems
-		SaveStateCompatInfo compatInfo = _console->ValidateSaveStateCompatibility(srcConsoleType.value());
-		if(!compatInfo.IsCompatible) {
-			MessageManager::DisplayMessage("SaveStates", "SaveStateWrongSystem");
-			return DeserializeResult::SpecificError;
-		}
-		s.RemoveKeys(compatInfo.FieldsToRemove);
-		if(!compatInfo.PrefixToAdd.empty()) {
-			s.AddKeyPrefix(compatInfo.PrefixToAdd);
-		} else if(!compatInfo.PrefixToRemove.empty()) {
-			s.RemoveKeyPrefix(compatInfo.PrefixToRemove);
-		}
-		if(!s.IsValid()) {
-			MessageManager::DisplayMessage("SaveStates", "SaveStateWrongSystem");
-			return DeserializeResult::SpecificError;
-		}
-	}
-	s.Stream(_console, "");
-	if(s.HasError()) {
-		return DeserializeResult::SpecificError;
-	}
-	if(sendNotification) {
-		_notificationManager->SendNotification(ConsoleNotificationType::StateLoaded);
-	}
-	return DeserializeResult::Success;
-}
-BaseVideoFilter* Emulator::GetVideoFilter(bool getDefaultFilter)
-{
-	shared_ptr<IConsole> console = GetConsole();
-	return console ? console->GetVideoFilter(getDefaultFilter) : new SnesDefaultVideoFilter(this);
-}
-void Emulator::GetScreenRotationOverride(uint32_t& rotation)
-{
-	shared_ptr<IConsole> console = GetConsole();
-	if(console) {
-		console->GetScreenRotationOverride(rotation);
-	}
-}
-void Emulator::InputBarcode(uint64_t barcode, uint32_t digitCount)
-{
-	shared_ptr<IConsole> console = GetConsole();
-	if(console) {
-		shared_ptr<IBarcodeReader> reader = console->GetControlManager()->GetControlDevice<IBarcodeReader>();
-		if(reader) {
-			auto lock = AcquireLock();
-			reader->InputBarcode(barcode, digitCount);
-		}
-	}
-}
-void Emulator::ProcessTapeRecorderAction(TapeRecorderAction action, string filename)
-{
-	shared_ptr<IConsole> console = GetConsole();
-	if(console) {
-		shared_ptr<ITapeRecorder> recorder = console->GetControlManager()->GetControlDevice<ITapeRecorder>();
-		if(recorder) {
-			auto lock = AcquireLock();
-			recorder->ProcessTapeRecorderAction(action, filename);
-		}
-	}
-}
-ShortcutState Emulator::IsShortcutAllowed(EmulatorShortcut shortcut, uint32_t shortcutParam)
-{
-	shared_ptr<IConsole> console = GetConsole();
-	return console ? console->IsShortcutAllowed(shortcut, shortcutParam) : ShortcutState::Default;
-}
-bool Emulator::IsKeyboardConnected()
-{
-	shared_ptr<IConsole> console = GetConsole();
-	return console ? console->GetControlManager()->IsKeyboardConnected() : false;
-}
-void Emulator::BlockDebuggerRequests()
-{
-	auto lock = _debuggerLock.AcquireSafe();
-	_blockDebuggerRequestCount++;
-	if(_debugger) {
-		_debugger->ResetSuspendCounter();
-	}
-	while(_debugRequestCount > 0) {
-		std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(10));
-	}
-}
-DebuggerRequest Emulator::GetDebugger(bool autoInit)
-{
-	if(IsRunning() && _blockDebuggerRequestCount == 0) {
-		auto lock = _debuggerLock.AcquireSafe();
-		if(IsRunning() && _blockDebuggerRequestCount == 0) {
-			if(!_debugger && autoInit) {
-				InitDebugger();
-			}
-			return DebuggerRequest(this);
-		}
-	}
-	return DebuggerRequest(nullptr);
-}
-void Emulator::ResetDebugger(bool startDebugger)
-{
-	shared_ptr<Debugger> currentDbg = _debugger.lock();
-	if(currentDbg) {
-		currentDbg->SuspendDebugger(false);
-	}
-	if(_emulationThreadId == std::this_thread::get_id()) {
-		_debugger.reset(startDebugger ? new Debugger(this, _console.get()) : nullptr);
-	} else {
-		auto emuLock = AcquireLock();
-		_debugger.reset(startDebugger ? new Debugger(this, _console.get()) : nullptr);
-	}
-}
-void Emulator::InitDebugger()
-{
-	if(!_debugger) {
-		auto lock = _debuggerLock.AcquireSafe();
-		if(!_debugger) {
-			BlockDebuggerRequests();
-			ResetDebugger(true);
-			_blockDebuggerRequestCount--;
-			_paused = false;
-		}
-	}
-}
-void Emulator::StopDebugger()
-{
-	_paused = IsPaused();
-	if(_debugger) {
-		auto lock = _debuggerLock.AcquireSafe();
+class Debugger;
+class DebugHud;
+class SoundMixer;
+class VideoRenderer;
+class VideoDecoder;
+class NotificationManager;
+class EmuSettings;
+class SaveStateManager;
+class RewindManager;
+class BatteryManager;
+class CheatManager;
+class MovieManager;
+class HistoryViewer;
+class FrameLimiter;
+class DebugStats;
+class BaseControlManager;
+class VirtualFile;
+class BaseVideoFilter;
+class ShortcutKeyHandler;
+class SystemActionManager;
+class AudioPlayerHud;
+class GameServer;
+class GameClient;
+class McpServer;
+class IInputRecorder;
+class IInputProvider;
+struct RomInfo;
+struct TimingInfo;
+enum class MemoryOperationType;
+enum class MemoryType;
+enum class EventType;
+enum class ConsoleRegion;
+enum class ConsoleType;
+enum class HashType;
+enum class TapeRecorderAction;
+struct ConsoleMemoryInfo
+{
+	void* Memory;
+	uint32_t Size;
+};
+class Emulator
+{
+private:
+	friend class DebuggerRequest;
+	friend class EmulatorLock;
+	unique_ptr<thread> _emuThread;
+	unique_ptr<AudioPlayerHud> _audioPlayerHud;
+	safe_ptr<IConsole> _console;
+	shared_ptr<ShortcutKeyHandler> _shortcutKeyHandler;
+	safe_ptr<Debugger> _debugger;
+	shared_ptr<SystemActionManager> _systemActionManager;
+	const unique_ptr<EmuSettings> _settings;
+	const unique_ptr<DebugHud> _debugHud;
+	const unique_ptr<DebugHud> _scriptHud;
+	const unique_ptr<NotificationManager> _notificationManager;
+	const unique_ptr<BatteryManager> _batteryManager;
+	const unique_ptr<SoundMixer> _soundMixer;
+	const unique_ptr<VideoRenderer> _videoRenderer;
+	const unique_ptr<VideoDecoder> _videoDecoder;
+	const unique_ptr<SaveStateManager> _saveStateManager;
+	const unique_ptr<CheatManager> _cheatManager;
+	const unique_ptr<MovieManager> _movieManager;
+	const unique_ptr<HistoryViewer> _historyViewer;
+	const shared_ptr<GameServer> _gameServer;
+	const shared_ptr<GameClient> _gameClient;
+	const shared_ptr<RewindManager> _rewindManager;
+	unique_ptr<McpServer> _mcpServer;
+	thread_local static thread::id _currentThreadId;
+	thread::id _emulationThreadId;
+	atomic<uint32_t> _lockCounter;
+	SimpleLock _runLock;
+	SimpleLock _loadLock;
+	SimpleLock _debuggerLock;
+	atomic<bool> _stopFlag;
+	atomic<bool> _paused;
+	atomic<bool> _pauseOnNextFrame;
+	atomic<bool> _threadPaused;
+	atomic<int> _debugRequestCount;
+	atomic<int> _blockDebuggerRequestCount;
+	atomic<bool> _isRunAheadFrame;
+	bool _frameRunning = false;
+	RomInfo _rom;
+	ConsoleType _consoleType = {};
+	ConsoleMemoryInfo _consoleMemory[DebugUtilities::GetMemoryTypeCount()] = {};
+	unique_ptr<DebugStats> _stats;
+	unique_ptr<FrameLimiter> _frameLimiter;
+	Timer _lastFrameTimer;
+	double _frameDelay = 0;
+	uint32_t _autoSaveStateFrameCounter = 0;
+	int32_t _stopCode = 0;
+	bool _stopRequested = false;
+	void WaitForLock();
+	void WaitForPauseEnd();
+	void ProcessAutoSaveState();
+	bool ProcessSystemActions();
+	void RunFrameWithRunAhead();
+	void BlockDebuggerRequests();
+	void ResetDebugger(bool startDebugger = false);
+	double GetFrameDelay();
+	void TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_ptr<IConsole>& console, bool useFileSignature);
+	template<typename T> void TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_ptr<IConsole>& console, bool useFileSignature);
+	void InitConsole(unique_ptr<IConsole>& newConsole, ConsoleMemoryInfo originalConsoleMemory[], bool preserveRom);
+	bool InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool stopRom = true, bool forPowerCycle = false);
+public:
+	Emulator();
+	~Emulator();
+	void Initialize(bool enableShortcuts = true);
+	void Release();
+	void Run();
+	void Stop(bool sendNotification, bool preventRecentGameSave = false, bool saveBattery = true);
+	void OnBeforeSendFrame();
+	void ProcessEndOfFrame();
+	void Reset();
+	void ReloadRom(bool forPowerCycle);
+	void PowerCycle();
+	void PauseOnNextFrame();
+	void Pause();
+	void Resume();
+	bool IsPaused();
+	void OnBeforePause(bool clearAudioBuffer);
+	bool LoadRom(VirtualFile romFile, VirtualFile patchFile, bool stopRom = true, bool forPowerCycle = false);
+	RomInfo& GetRomInfo() { return _rom; }
+	string GetHash(HashType type);
+	uint32_t GetCrc32();
+	PpuFrameInfo GetPpuFrame();
+	ConsoleRegion GetRegion();
+	shared_ptr<IConsole> GetConsole();
+	IConsole* GetConsoleUnsafe();
+	ConsoleType GetConsoleType();
+	vector<CpuType> GetCpuTypes();
+	uint64_t GetMasterClock();
+	uint32_t GetMasterClockRate();
+	EmulatorLock AcquireLock(bool allowDebuggerLock = true);
+	void Lock();
+	void Unlock();
+	bool IsThreadPaused();
+	bool IsDebuggerBlocked() { return _blockDebuggerRequestCount > 0; }
+	void SuspendDebugger(bool release);
+	void Serialize(ostream& out, bool includeSettings, int compressionLevel = 1);
+	DeserializeResult Deserialize(istream& in, uint32_t fileFormatVersion, bool includeSettings, optional<ConsoleType> consoleType = std::nullopt, bool sendNotification = true);
+	SoundMixer* GetSoundMixer() { return _soundMixer.get(); }
+	VideoRenderer* GetVideoRenderer() { return _videoRenderer.get(); }
+	VideoDecoder* GetVideoDecoder() { return _videoDecoder.get(); }
+	ShortcutKeyHandler* GetShortcutKeyHandler() { return _shortcutKeyHandler.get(); }
+	NotificationManager* GetNotificationManager() { return _notificationManager.get(); }
+	EmuSettings* GetSettings() { return _settings.get(); }
+	SaveStateManager* GetSaveStateManager() { return _saveStateManager.get(); }
+	RewindManager* GetRewindManager() { return _rewindManager.get(); }
+	DebugHud* GetDebugHud() { return _debugHud.get(); }
+	DebugHud* GetScriptHud() { return _scriptHud.get(); }
+	BatteryManager* GetBatteryManager() { return _batteryManager.get(); }
+	CheatManager* GetCheatManager() { return _cheatManager.get(); }
+	MovieManager* GetMovieManager() { return _movieManager.get(); }
+	HistoryViewer* GetHistoryViewer() { return _historyViewer.get(); }
+	GameServer* GetGameServer() { return _gameServer.get(); }
+	GameClient* GetGameClient() { return _gameClient.get(); }
+	McpServer* GetMcpServer() { return _mcpServer.get(); }
+	shared_ptr<SystemActionManager> GetSystemActionManager() { return _systemActionManager; }
+	BaseVideoFilter* GetVideoFilter(bool getDefaultFilter = false);
+	void GetScreenRotationOverride(uint32_t& rotation);
+	void InputBarcode(uint64_t barcode, uint32_t digitCount);
+	void ProcessTapeRecorderAction(TapeRecorderAction action, string filename);
+	ShortcutState IsShortcutAllowed(EmulatorShortcut shortcut, uint32_t shortcutParam);
+	bool IsKeyboardConnected();
+	void InitDebugger();
+	void StopDebugger();
+	DebuggerRequest GetDebugger(bool autoInit = false);
+	bool IsDebugging() { return !!_debugger; }
+	Debugger* InternalGetDebugger() { return _debugger.get(); }
+	thread::id GetEmulationThreadId() { return _emulationThreadId; }
+	bool IsEmulationThread();
+	int32_t GetStopCode() { return _stopCode; }
+	void SetStopCode(int32_t stopCode);
+	void RegisterMemory(MemoryType type, void* memory, uint32_t size);
+	ConsoleMemoryInfo GetMemory(MemoryType type);
+	AudioTrackInfo GetAudioTrackInfo();
+	void ProcessAudioPlayerAction(AudioPlayerActionParams p);
+	AudioPlayerHud* GetAudioPlayerHud() { return _audioPlayerHud.get(); }
+	bool IsRunning() { return _console != nullptr; }
+	bool IsRunAheadFrame() { return _isRunAheadFrame; }
+	TimingInfo GetTimingInfo(CpuType cpuType);
+	uint32_t GetFrameCount();
+	uint32_t GetLagCounter();
+	void ResetLagCounter();
+	bool HasControlDevice(ControllerType type);
+	void RegisterInputRecorder(IInputRecorder* recorder);
+	void UnregisterInputRecorder(IInputRecorder* recorder);
+	void RegisterInputProvider(IInputProvider* provider);
+	void UnregisterInputProvider(IInputProvider* provider);
+	double GetFps();
+	template<CpuType type> __forceinline void ProcessInstruction()
+	{
 		if(_debugger) {
-			BlockDebuggerRequests();
-			ResetDebugger();
-			_blockDebuggerRequestCount--;
+			_debugger->ProcessInstruction<type>();
 		}
 	}
-}
-bool Emulator::IsEmulationThread()
-{
-	return _emulationThreadId == _currentThreadId;
-}
-void Emulator::SetStopCode(int32_t stopCode)
-{
-	if(_stopCode != 0) {
-		return;
+	template<CpuType type, uint8_t accessWidth = 1, MemoryAccessFlags flags = MemoryAccessFlags::None, typename T> __forceinline void ProcessMemoryRead(uint32_t addr, T& value, MemoryOperationType opType)
+	{
+		if(_debugger) {
+			_debugger->ProcessMemoryRead<type, accessWidth, flags>(addr, value, opType);
+		}
 	}
-	_stopCode = stopCode;
-	if(!_stopFlag && !_stopRequested) {
-		_stopRequested = true;
-		thread stopEmuTask([this]() {
-			Stop(true);
-		});
-		stopEmuTask.detach();
+	template<CpuType type, uint8_t accessWidth = 1, MemoryAccessFlags flags = MemoryAccessFlags::None, typename T> __forceinline bool ProcessMemoryWrite(uint32_t addr, T& value, MemoryOperationType opType)
+	{
+		if(_debugger) {
+			return _debugger->ProcessMemoryWrite<type, accessWidth, flags>(addr, value, opType);
+		}
+		return true;
 	}
-}
-void Emulator::RegisterMemory(MemoryType type, void* memory, uint32_t size)
-{
-	_consoleMemory[(int)type] = { memory, size };
-}
-ConsoleMemoryInfo Emulator::GetMemory(MemoryType type)
-{
-	return _consoleMemory[(int)type];
-}
-AudioTrackInfo Emulator::GetAudioTrackInfo()
-{
-	shared_ptr<IConsole> console = GetConsole();
-	if(!console) {
-		return {};
+	template<CpuType cpuType, MemoryType memType, MemoryOperationType opType, typename T> __forceinline void ProcessMemoryAccess(uint32_t addr, T value)
+	{
+		if(_debugger) {
+			_debugger->ProcessMemoryAccess<cpuType, memType, opType, T>(addr, value);
+		}
 	}
-	AudioTrackInfo track = console->GetAudioTrackInfo();
-	AudioConfig audioCfg = _settings->GetAudioConfig();
-	if(track.Length <= 0 && audioCfg.AudioPlayerEnableTrackLength) {
-		track.Length = audioCfg.AudioPlayerTrackLength;
-		track.FadeLength = 1;
+	template<CpuType type> __forceinline void ProcessIdleCycle()
+	{
+		if(_debugger) {
+			_debugger->ProcessIdleCycle<type>();
+		}
 	}
-	return track;
-}
-void Emulator::ProcessAudioPlayerAction(AudioPlayerActionParams p)
+	template<CpuType type> __forceinline void ProcessHaltedCpu()
+	{
+		if(_debugger) {
+			_debugger->ProcessHaltedCpu<type>();
+		}
+	}
+	template<CpuType type, typename T> __forceinline void ProcessPpuRead(uint32_t addr, T& value, MemoryType memoryType, MemoryOperationType opType = MemoryOperationType::Read)
+	{
+		if(_debugger) {
+			_debugger->ProcessPpuRead<type>(addr, value, memoryType, opType);
+		}
+	}
+	template<CpuType type, typename T> __forceinline void ProcessPpuWrite(uint32_t addr, T& value, MemoryType memoryType)
+	{
+		if(_debugger) {
+			_debugger->ProcessPpuWrite<type>(addr, value, memoryType);
+		}
+	}
+	template<CpuType type> __forceinline void ProcessPpuCycle()
+	{
+		if(_debugger) {
+			_debugger->ProcessPpuCycle<type>();
+		}
+	}
+	template<CpuType type> void ProcessInterrupt(uint32_t originalPc, uint32_t currentPc, bool forNmi)
+	{
+		if(_debugger) {
+			_debugger->ProcessInterrupt<type>(originalPc, currentPc, forNmi);
+		}
+	}
+	__forceinline void DebugLog(string log)
+	{
+		if(_debugger) {
+			_debugger->Log(log);
+		}
+	}
+	void ProcessEvent(EventType type, std::optional<CpuType> cpuType = std::nullopt);
+	template<CpuType cpuType> void AddDebugEvent(DebugEventType evtType);
+	void BreakIfDebugging(CpuType sourceCpu, BreakSource source);
+};
+enum class HashType
 {
-	shared_ptr<IConsole> console = GetConsole();
-	if(console) {
-		console->ProcessAudioPlayerAction(p);
-	}
-}
-void Emulator::ProcessEvent(EventType type, std::optional<CpuType> cpuType)
-{
-	if(_debugger) {
-		_debugger->ProcessEvent(type, cpuType);
-	}
-}
-template<CpuType cpuType>
-void Emulator::AddDebugEvent(DebugEventType evtType)
-{
-	if(_debugger) {
-		_debugger->GetEventManager(cpuType)->AddEvent(evtType);
-	}
-}
-void Emulator::BreakIfDebugging(CpuType sourceCpu, BreakSource source)
-{
-	if(_debugger) {
-		_debugger->BreakImmediately(sourceCpu, source);
-	}
-}
-template void Emulator::AddDebugEvent<CpuType::Snes>(DebugEventType evtType);
-template void Emulator::AddDebugEvent<CpuType::Gameboy>(DebugEventType evtType);
-template void Emulator::AddDebugEvent<CpuType::Nes>(DebugEventType evtType);
-template void Emulator::AddDebugEvent<CpuType::Pce>(DebugEventType evtType);
-thread_local std::thread::id Emulator::_currentThreadId = std::this_thread::get_id();
+	Sha1,
+	Sha1Cheat
+};
 ```
 
 ## File: Core/Shared/MessageManager.cpp
@@ -26851,6 +25635,1552 @@ enum class DebuggerFlags
 	GbaDebuggerEnabled = (1 << 11),
 	WsDebuggerEnabled = (1 << 12),
 };
+```
+
+## File: Core/Shared/Emulator.cpp
+```cpp
+#include "pch.h"
+#include <assert.h>
+#include "Shared/Emulator.h"
+#include "Shared/NotificationManager.h"
+#include "Shared/Audio/SoundMixer.h"
+#include "Shared/Audio/AudioPlayerHud.h"
+#include "Shared/Video/VideoDecoder.h"
+#include "Shared/Video/VideoRenderer.h"
+#include "Shared/Video/DebugHud.h"
+#include "Shared/FrameLimiter.h"
+#include "Shared/MessageManager.h"
+#include "Shared/KeyManager.h"
+#include "Shared/EmuSettings.h"
+#include "Shared/SaveStateManager.h"
+#include "Shared/Video/DebugStats.h"
+#include "Shared/RewindManager.h"
+#include "Shared/ShortcutKeyHandler.h"
+#include "Shared/EmulatorLock.h"
+#include "Shared/DebuggerRequest.h"
+#include "Shared/Movies/MovieManager.h"
+#include "Shared/BatteryManager.h"
+#include "Shared/CheatManager.h"
+#include "Shared/SystemActionManager.h"
+#include "Shared/TimingInfo.h"
+#include "Shared/HistoryViewer.h"
+#include "Netplay/GameServer.h"
+#include "Netplay/GameClient.h"
+#include "Shared/McpServer.h"
+#include "Shared/Interfaces/IConsole.h"
+#include "Shared/Interfaces/IBarcodeReader.h"
+#include "Shared/Interfaces/ITapeRecorder.h"
+#include "Shared/BaseControlManager.h"
+#include "SNES/SnesConsole.h"
+#include "SNES/SnesDefaultVideoFilter.h"
+#include "NES/NesConsole.h"
+#include "Gameboy/Gameboy.h"
+#include "PCE/PceConsole.h"
+#include "SMS/SmsConsole.h"
+#include "GBA/GbaConsole.h"
+#include "WS/WsConsole.h"
+#include "Debugger/Debugger.h"
+#include "Debugger/BaseEventManager.h"
+#include "Debugger/DebugTypes.h"
+#include "Debugger/DebugUtilities.h"
+#include "Utilities/Serializer.h"
+#include "Utilities/Timer.h"
+#include "Utilities/VirtualFile.h"
+#include "Utilities/PlatformUtilities.h"
+#include "Utilities/FolderUtilities.h"
+#include "Shared/MemoryOperationType.h"
+#include "Shared/EventType.h"
+Emulator::Emulator() :
+	_settings(new EmuSettings(this)),
+	_debugHud(new DebugHud()),
+	_scriptHud(new DebugHud()),
+	_notificationManager(new NotificationManager()),
+	_batteryManager(new BatteryManager()),
+	_soundMixer(new SoundMixer(this)),
+	_videoRenderer(new VideoRenderer(this)),
+	_videoDecoder(new VideoDecoder(this)),
+	_saveStateManager(new SaveStateManager(this)),
+	_cheatManager(new CheatManager(this)),
+	_movieManager(new MovieManager(this)),
+	_historyViewer(new HistoryViewer(this)),
+	_gameServer(new GameServer(this)),
+	_gameClient(new GameClient(this)),
+	_rewindManager(new RewindManager(this))
+{
+	_paused = false;
+	_pauseOnNextFrame = false;
+	_stopFlag = false;
+	_isRunAheadFrame = false;
+	_lockCounter = 0;
+	_threadPaused = false;
+	_debugRequestCount = 0;
+	_blockDebuggerRequestCount = 0;
+	_videoDecoder->Init();
+}
+Emulator::~Emulator()
+{
+}
+void Emulator::Initialize(bool enableShortcuts)
+{
+	_systemActionManager.reset(new SystemActionManager(this));
+	if(enableShortcuts) {
+		_shortcutKeyHandler.reset(new ShortcutKeyHandler(this));
+		_notificationManager->RegisterNotificationListener(_shortcutKeyHandler);
+	}
+	_videoDecoder->StartThread();
+	_videoRenderer->StartThread();
+	if(!_mcpServer) {
+		_mcpServer.reset(new McpServer(this, 12345));
+		_mcpServer->Start();
+	}
+}
+void Emulator::Release()
+{
+	Stop(true);
+	_gameClient->Disconnect();
+	_gameServer->StopServer();
+	if(_mcpServer) {
+		_mcpServer->Stop();
+		_mcpServer.reset();
+	}
+	_videoDecoder->StopThread();
+	_videoRenderer->StopThread();
+	_shortcutKeyHandler.reset();
+}
+void Emulator::Run()
+{
+	if(!_console) {
+		return;
+	}
+	while(!_runLock.TryAcquire(50)) {
+		if(_stopFlag) {
+			return;
+		}
+	}
+	_stopFlag = false;
+	_isRunAheadFrame = false;
+	PlatformUtilities::EnableHighResolutionTimer();
+	PlatformUtilities::DisableScreensaver();
+	_emulationThreadId = std::this_thread::get_id();
+	_frameDelay = GetFrameDelay();
+	_stats.reset(new DebugStats());
+	_frameLimiter.reset(new FrameLimiter(_frameDelay));
+	_lastFrameTimer.Reset();
+	while(!_stopFlag) {
+		if(_mcpServer) {
+			_mcpServer->DrainCommandQueue();
+		}
+		if(_mcpServer && _mcpServer->IsExternalControlled()) {
+			std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(1));
+		} else {
+			bool useRunAhead = _settings->GetEmulationConfig().RunAheadFrames > 0 && !_debugger && !_audioPlayerHud && !_rewindManager->IsRewinding() && _settings->GetEmulationSpeed() > 0 && _settings->GetEmulationSpeed() <= 100;
+			if(useRunAhead) {
+				RunFrameWithRunAhead();
+			} else {
+				_console->RunFrame();
+				_rewindManager->ProcessEndOfFrame();
+				_historyViewer->ProcessEndOfFrame();
+				ProcessSystemActions();
+			}
+			ProcessAutoSaveState();
+		}
+		WaitForLock();
+		if(_pauseOnNextFrame) {
+			_pauseOnNextFrame = false;
+			_paused = true;
+		}
+		if(_paused && !_stopFlag && !_debugger) {
+			WaitForPauseEnd();
+		}
+	}
+	_emulationThreadId = thread::id();
+	if(_runLock.IsLockedByCurrentThread()) {
+		_runLock.Release();
+	}
+	PlatformUtilities::EnableScreensaver();
+	PlatformUtilities::RestoreTimerResolution();
+}
+void Emulator::ProcessAutoSaveState()
+{
+	if(_autoSaveStateFrameCounter > 0) {
+		_autoSaveStateFrameCounter--;
+		if(_autoSaveStateFrameCounter == 0) {
+			_saveStateManager->SaveState(SaveStateManager::AutoSaveStateIndex, false);
+		}
+	} else {
+		uint32_t saveStateDelay = _settings->GetPreferences().AutoSaveStateDelay;
+		if(saveStateDelay > 0) {
+			_autoSaveStateFrameCounter = (uint32_t)(GetFps() * saveStateDelay * 60);
+		}
+	}
+}
+bool Emulator::ProcessSystemActions()
+{
+	if(_systemActionManager->IsResetPressed()) {
+		Reset();
+		shared_ptr<Debugger> debugger = _debugger.lock();
+		if(debugger) {
+			debugger->ResetSuspendCounter();
+		}
+		return true;
+	} else if(_systemActionManager->IsPowerCyclePressed()) {
+		PowerCycle();
+		return true;
+	}
+	return false;
+}
+void Emulator::RunFrameWithRunAhead()
+{
+	stringstream runAheadState;
+	uint32_t frameCount = _settings->GetEmulationConfig().RunAheadFrames;
+	_isRunAheadFrame = true;
+	_console->RunFrame();
+	Serialize(runAheadState, false, 0);
+	while(frameCount > 1) {
+		frameCount--;
+		_console->RunFrame();
+	}
+	_isRunAheadFrame = false;
+	_console->RunFrame();
+	_rewindManager->ProcessEndOfFrame();
+	_historyViewer->ProcessEndOfFrame();
+	bool wasReset = ProcessSystemActions();
+	if(!wasReset) {
+		_isRunAheadFrame = true;
+		Deserialize(runAheadState, SaveStateManager::FileFormatVersion, false);
+		_isRunAheadFrame = false;
+	}
+}
+void Emulator::OnBeforeSendFrame()
+{
+	if(!_isRunAheadFrame) {
+		if(_audioPlayerHud) {
+			_audioPlayerHud->Draw(GetFrameCount(), GetFps());
+		}
+		if(_stats && _settings->GetPreferences().ShowDebugInfo) {
+			double lastFrameTime = _lastFrameTimer.GetElapsedMS();
+			_lastFrameTimer.Reset();
+			_stats->DisplayStats(this, lastFrameTime);
+		}
+	}
+}
+void Emulator::ProcessEndOfFrame()
+{
+	if(!_isRunAheadFrame) {
+		_frameLimiter->ProcessFrame();
+		while(_frameLimiter->WaitForNextFrame()) {
+			if(_stopFlag || _frameDelay != GetFrameDelay() || _paused || _pauseOnNextFrame || _lockCounter > 0) {
+				break;
+			}
+		}
+		double newFrameDelay = GetFrameDelay();
+		if(newFrameDelay != _frameDelay) {
+			_frameDelay = newFrameDelay;
+			_frameLimiter->SetDelay(_frameDelay);
+		}
+		_console->GetControlManager()->ProcessEndOfFrame();
+	}
+	_frameRunning = false;
+}
+void Emulator::Stop(bool sendNotification, bool preventRecentGameSave, bool saveBattery)
+{
+	BlockDebuggerRequests();
+	_stopFlag = true;
+	_notificationManager->SendNotification(ConsoleNotificationType::BeforeGameUnload);
+	ResetDebugger();
+	if(_emuThread) {
+		_emuThread->join();
+		_emuThread.release();
+	}
+	if(_console && saveBattery) {
+		_console->SaveBattery();
+	}
+	if(!preventRecentGameSave && _console && !_settings->GetPreferences().DisableGameSelectionScreen && !_audioPlayerHud) {
+		RomInfo romInfo = GetRomInfo();
+		_saveStateManager->SaveRecentGame(romInfo.RomFile.GetFileName(), romInfo.RomFile, romInfo.PatchFile);
+	}
+	if(sendNotification) {
+		_notificationManager->SendNotification(ConsoleNotificationType::BeforeEmulationStop);
+	}
+	_movieManager->Stop();
+	_videoDecoder->StopThread();
+	_rewindManager->Reset();
+	if(_console) {
+		_console.reset();
+	}
+	OnBeforePause(true);
+	if(sendNotification) {
+		_notificationManager->SendNotification(ConsoleNotificationType::EmulationStopped);
+	}
+	_blockDebuggerRequestCount--;
+}
+void Emulator::Reset()
+{
+	Lock();
+	_console->Reset();
+	_systemActionManager->ResetState();
+	_console->GetControlManager()->UpdateInputState();
+	_console->GetControlManager()->ResetLagCounter();
+	_videoRenderer->ClearFrame();
+	_notificationManager->SendNotification(ConsoleNotificationType::GameReset);
+	ProcessEvent(EventType::Reset);
+	Unlock();
+}
+void Emulator::ReloadRom(bool forPowerCycle)
+{
+	RomInfo info = GetRomInfo();
+	if(!LoadRom((string)info.RomFile, (string)info.PatchFile, !forPowerCycle, forPowerCycle)) {
+		if(forPowerCycle) {
+			_systemActionManager->ResetState();
+			SuspendDebugger(true);
+		}
+	}
+}
+void Emulator::PowerCycle()
+{
+	ReloadRom(true);
+}
+bool Emulator::LoadRom(VirtualFile romFile, VirtualFile patchFile, bool stopRom, bool forPowerCycle)
+{
+	bool result = false;
+	try {
+		result = InternalLoadRom(romFile, patchFile, stopRom, forPowerCycle);
+	} catch(std::exception& ex) {
+		_videoDecoder->StartThread();
+		_videoRenderer->StartThread();
+		MessageManager::DisplayMessage("Error", "UnexpectedError", ex.what());
+		Stop(false, true, false);
+	}
+	if(!result) {
+		_notificationManager->SendNotification(ConsoleNotificationType::GameLoadFailed);
+	}
+	return result;
+}
+bool Emulator::InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool stopRom, bool forPowerCycle)
+{
+	if(!romFile.IsValid()) {
+		MessageManager::DisplayMessage("Error", "CouldNotLoadFile", romFile.GetFileName());
+		return false;
+	}
+	if(IsEmulationThread()) {
+		_threadPaused = true;
+	}
+	BlockDebuggerRequests();
+	auto emuLock = AcquireLock();
+	auto dbgLock = _debuggerLock.AcquireSafe();
+	auto lock = _loadLock.AcquireSafe();
+	_notificationManager->SendNotification(ConsoleNotificationType::BeforeGameLoad);
+	bool wasPaused = IsPaused();
+	shared_ptr<Debugger> debugger = _debugger.lock();
+	bool debuggerActive = debugger != nullptr;
+	ResetDebugger();
+	if(patchFile.IsValid()) {
+		if(romFile.ApplyPatch(patchFile)) {
+			MessageManager::DisplayMessage("Patch", "ApplyingPatch", patchFile.GetFileName());
+		} else {
+			MessageManager::DisplayMessage("Patch", "PatchFailed", patchFile.GetFileName());
+		}
+	}
+	if(_console) {
+		_console->SaveBattery();
+	}
+	_soundMixer->StopAudio();
+	if(!forPowerCycle) {
+		_movieManager->Stop();
+	}
+	ConsoleMemoryInfo originalConsoleMemory[DebugUtilities::GetMemoryTypeCount()] = {};
+	memcpy(originalConsoleMemory, _consoleMemory, sizeof(_consoleMemory));
+	unique_ptr<IConsole> console;
+	LoadRomResult result = LoadRomResult::UnknownType;
+	TryLoadRom(romFile, result, console, false);
+	TryLoadRom(romFile, result, console, true);
+	if(result != LoadRomResult::Success) {
+		MessageManager::DisplayMessage("Error", "CouldNotLoadFile", romFile.GetFileName());
+		if(debugger) {
+			_debugger.reset(debugger);
+			debugger->ResetSuspendCounter();
+		}
+		_blockDebuggerRequestCount--;
+		return false;
+	}
+	if(debugger) {
+		debugger->Release();
+		debugger.reset();
+	}
+	if(stopRom) {
+		bool gameChanged = (string)_rom.RomFile != (string)romFile || (string)_rom.PatchFile != (string)patchFile;
+		Stop(false, !gameChanged, false);
+		memset(originalConsoleMemory, 0, sizeof(originalConsoleMemory));
+	}
+	_videoDecoder->StopThread();
+	_videoRenderer->StopThread();
+	_rom.RomFile = (string)romFile;
+	_rom.PatchFile = (string)patchFile;
+	_rom.Format = console->GetRomFormat();
+	_rom.DipSwitches = console->GetDipSwitchInfo();
+	if(_rom.Format == RomFormat::Spc || _rom.Format == RomFormat::Nsf || _rom.Format == RomFormat::Gbs || _rom.Format == RomFormat::PceHes) {
+		_audioPlayerHud.reset(new AudioPlayerHud(this));
+	} else {
+		_audioPlayerHud.reset();
+	}
+	_cheatManager->ClearCheats(false);
+	uint32_t pollCounter = 0;
+	if(forPowerCycle && console->GetControlManager()) {
+		pollCounter = console->GetControlManager()->GetPollCounter();
+	}
+	InitConsole(console, originalConsoleMemory, forPowerCycle);
+	_console->GetControlManager()->SetPollCounter(pollCounter);
+	_rewindManager->InitHistory();
+	if(debuggerActive || _settings->CheckFlag(EmulationFlags::ConsoleMode)) {
+		InitDebugger();
+	}
+	_notificationManager->RegisterNotificationListener(_rewindManager);
+	_systemActionManager->ResetState();
+	_console->GetControlManager()->UpdateControlDevices();
+	_console->GetControlManager()->UpdateInputState();
+	_autoSaveStateFrameCounter = 0;
+	_blockDebuggerRequestCount--;
+	dbgLock.Release();
+	_threadPaused = true;
+	bool needPause = wasPaused && _debugger;
+	if(needPause) {
+		_debugger->Step(GetCpuTypes()[0], 1, StepType::Step, BreakSource::Pause);
+	}
+	GameLoadedEventParams params = { needPause, forPowerCycle };
+	_notificationManager->SendNotification(ConsoleNotificationType::GameLoaded, &params);
+	_threadPaused = false;
+	if(!forPowerCycle && !_audioPlayerHud) {
+		ConsoleRegion region = _console->GetRegion();
+		string modelName = region == ConsoleRegion::Pal ? "PAL" : (region == ConsoleRegion::Dendy ? "Dendy" : "NTSC");
+		MessageManager::DisplayMessage(modelName, FolderUtilities::GetFilename(GetRomInfo().RomFile.GetFileName(), false));
+	}
+	_videoDecoder->StartThread();
+	_videoRenderer->StartThread();
+	if(stopRom) {
+		_stopFlag = false;
+		_emuThread.reset(new thread(&Emulator::Run, this));
+	}
+	return true;
+}
+void Emulator::InitConsole(unique_ptr<IConsole>& newConsole, ConsoleMemoryInfo originalConsoleMemory[], bool preserveRom)
+{
+	if(preserveRom && _console) {
+		magic_enum::enum_for_each<MemoryType>([&](MemoryType memType) {
+			if(DebugUtilities::IsRom(memType)) {
+				uint32_t orgSize = originalConsoleMemory[(int)memType].Size;
+				if(orgSize > 0 && GetMemory(memType).Size == orgSize) {
+					memcpy(_consoleMemory[(int)memType].Memory, originalConsoleMemory[(int)memType].Memory, orgSize);
+				}
+			}
+		});
+	}
+	_console.reset(newConsole);
+	_consoleType = _console->GetConsoleType();
+	_notificationManager->RegisterNotificationListener(_console.lock());
+}
+void Emulator::TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_ptr<IConsole>& console, bool useFileSignature)
+{
+	TryLoadRom<NesConsole>(romFile, result, console, useFileSignature);
+	TryLoadRom<SnesConsole>(romFile, result, console, useFileSignature);
+	TryLoadRom<Gameboy>(romFile, result, console, useFileSignature);
+	TryLoadRom<PceConsole>(romFile, result, console, useFileSignature);
+	TryLoadRom<SmsConsole>(romFile, result, console, useFileSignature);
+	TryLoadRom<GbaConsole>(romFile, result, console, useFileSignature);
+	TryLoadRom<WsConsole>(romFile, result, console, useFileSignature);
+}
+template<typename T>
+void Emulator::TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_ptr<IConsole>& console, bool useFileSignature)
+{
+	if(result == LoadRomResult::UnknownType) {
+		string romExt = romFile.GetFileExtension();
+		vector<string> extensions = T::GetSupportedExtensions();
+		if(std::find(extensions.begin(), extensions.end(), romExt) != extensions.end() || (useFileSignature && romFile.CheckFileSignature(T::GetSupportedSignatures()))) {
+			ConsoleMemoryInfo consoleMemory[DebugUtilities::GetMemoryTypeCount()] = {};
+			memcpy(consoleMemory, _consoleMemory, sizeof(_consoleMemory));
+			memset(_consoleMemory, 0, sizeof(_consoleMemory));
+			bool hasBattery = _batteryManager->HasBattery();
+			_batteryManager->Initialize(FolderUtilities::GetFilename(romFile.GetFileName(), false));
+			console.reset(new T(this));
+			result = console->LoadRom(romFile);
+			if(result != LoadRomResult::Success) {
+				memcpy(_consoleMemory, consoleMemory, sizeof(_consoleMemory));
+				_batteryManager->Initialize(FolderUtilities::GetFilename(_rom.RomFile.GetFileName(), false), hasBattery);
+			}
+		}
+	}
+}
+string Emulator::GetHash(HashType type)
+{
+	shared_ptr<IConsole> console = _console.lock();
+	string hash = console->GetHash(type);
+	if(hash.size()) {
+		return hash;
+	} else if(type == HashType::Sha1) {
+		return _rom.RomFile.GetSha1Hash();
+	} else if(type == HashType::Sha1Cheat) {
+		return _rom.RomFile.GetSha1Hash();
+	}
+	return "";
+}
+uint32_t Emulator::GetCrc32()
+{
+	return _rom.RomFile.GetCrc32();
+}
+PpuFrameInfo Emulator::GetPpuFrame()
+{
+	shared_ptr<IConsole> console = GetConsole();
+	return console ? console->GetPpuFrame() : PpuFrameInfo {};
+}
+ConsoleRegion Emulator::GetRegion()
+{
+	shared_ptr<IConsole> console = GetConsole();
+	return console ? console->GetRegion() : ConsoleRegion::Ntsc;
+}
+shared_ptr<IConsole> Emulator::GetConsole()
+{
+	return _console.lock();
+}
+IConsole* Emulator::GetConsoleUnsafe()
+{
+#ifdef _DEBUG
+	if(!IsEmulationThread()) {
+		throw std::runtime_error("GetConsoleUnsafe should only be called from the emulation thread");
+	}
+#endif
+	return _console.get();
+}
+ConsoleType Emulator::GetConsoleType()
+{
+	return _consoleType;
+}
+vector<CpuType> Emulator::GetCpuTypes()
+{
+	shared_ptr<IConsole> console = GetConsole();
+	return console ? console->GetCpuTypes() : vector<CpuType>{};
+}
+TimingInfo Emulator::GetTimingInfo(CpuType cpuType)
+{
+	shared_ptr<IConsole> console = GetConsole();
+	return console ? console->GetTimingInfo(cpuType) : TimingInfo {};
+}
+uint64_t Emulator::GetMasterClock()
+{
+#if DEBUG
+	if(!IsEmulationThread()) {
+		throw std::runtime_error("called on wrong thread");
+	}
+#endif
+	return _console->GetMasterClock();
+}
+uint32_t Emulator::GetMasterClockRate()
+{
+#if DEBUG
+	if(!IsEmulationThread()) {
+		throw std::runtime_error("called on wrong thread");
+	}
+#endif
+	return _console->GetMasterClockRate();
+}
+uint32_t Emulator::GetFrameCount()
+{
+	return GetPpuFrame().FrameCount;
+}
+uint32_t Emulator::GetLagCounter()
+{
+	shared_ptr<IConsole> console = GetConsole();
+	return console ? console->GetControlManager()->GetLagCounter() : 0;
+}
+void Emulator::ResetLagCounter()
+{
+	shared_ptr<IConsole> console = GetConsole();
+	if(console) {
+		console->GetControlManager()->ResetLagCounter();
+	}
+}
+bool Emulator::HasControlDevice(ControllerType type)
+{
+	shared_ptr<IConsole> console = GetConsole();
+	return console ? console->GetControlManager()->HasControlDevice(type) : false;
+}
+void Emulator::RegisterInputRecorder(IInputRecorder* recorder)
+{
+	shared_ptr<IConsole> console = GetConsole();
+	if(console) {
+		console->GetControlManager()->RegisterInputRecorder(recorder);
+	}
+}
+void Emulator::UnregisterInputRecorder(IInputRecorder* recorder)
+{
+	shared_ptr<IConsole> console = GetConsole();
+	if(console) {
+		console->GetControlManager()->UnregisterInputRecorder(recorder);
+	}
+}
+void Emulator::RegisterInputProvider(IInputProvider* provider)
+{
+	shared_ptr<IConsole> console = GetConsole();
+	if(console) {
+		console->GetControlManager()->RegisterInputProvider(provider);
+	}
+}
+void Emulator::UnregisterInputProvider(IInputProvider* provider)
+{
+	shared_ptr<IConsole> console = GetConsole();
+	if(console) {
+		console->GetControlManager()->UnregisterInputProvider(provider);
+	}
+}
+double Emulator::GetFps()
+{
+	shared_ptr<IConsole> console = GetConsole();
+	double fps = console ? console->GetFps() : 60.0;
+	if(_settings->GetVideoConfig().IntegerFpsMode) {
+		fps = std::round(fps);
+	}
+	return fps;
+}
+double Emulator::GetFrameDelay()
+{
+	uint32_t emulationSpeed = _settings->GetEmulationSpeed();
+	double frameDelay;
+	if(emulationSpeed == 0) {
+		frameDelay = 0;
+	} else {
+		frameDelay = 1000 / GetFps();
+		frameDelay /= (emulationSpeed / 100.0);
+	}
+	return frameDelay;
+}
+void Emulator::PauseOnNextFrame()
+{
+	shared_ptr<Debugger> debugger = _debugger.lock();
+	if(debugger) {
+		debugger->PauseOnNextFrame();
+	} else {
+		_pauseOnNextFrame = true;
+		_paused = false;
+	}
+}
+void Emulator::Pause()
+{
+	shared_ptr<Debugger> debugger = _debugger.lock();
+	if(debugger) {
+		debugger->Step(GetCpuTypes()[0], 1, StepType::Step, BreakSource::Pause);
+	} else {
+		_paused = true;
+	}
+}
+void Emulator::Resume()
+{
+	shared_ptr<Debugger> debugger = _debugger.lock();
+	if(debugger) {
+		debugger->Run();
+	} else {
+		_paused = false;
+	}
+}
+bool Emulator::IsPaused()
+{
+	shared_ptr<Debugger> debugger = _debugger.lock();
+	if(debugger) {
+		return debugger->IsPaused();
+	} else {
+		return _paused;
+	}
+}
+void Emulator::OnBeforePause(bool clearAudioBuffer)
+{
+	_soundMixer->StopAudio(clearAudioBuffer);
+	KeyManager::SetForceFeedback(0);
+}
+void Emulator::WaitForPauseEnd()
+{
+	_notificationManager->SendNotification(ConsoleNotificationType::GamePaused);
+	OnBeforePause(false);
+	_runLock.Release();
+	PlatformUtilities::EnableScreensaver();
+	PlatformUtilities::RestoreTimerResolution();
+	while(_paused && !_rewindManager->IsRewinding() && !_stopFlag && !_debugger) {
+		std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(30));
+		if(_systemActionManager->IsResetPending()) {
+			break;
+		}
+	}
+	PlatformUtilities::DisableScreensaver();
+	PlatformUtilities::EnableHighResolutionTimer();
+	while(!_stopFlag && !_runLock.TryAcquire(50)) { }
+	if(!_stopFlag) {
+		_notificationManager->SendNotification(ConsoleNotificationType::GameResumed);
+	}
+}
+EmulatorLock Emulator::AcquireLock(bool allowDebuggerLock)
+{
+	return EmulatorLock(this, allowDebuggerLock);
+}
+void Emulator::Lock()
+{
+	SuspendDebugger(false);
+	_lockCounter++;
+	_runLock.Acquire();
+}
+void Emulator::Unlock()
+{
+	SuspendDebugger(true);
+	_runLock.Release();
+	_lockCounter--;
+}
+bool Emulator::IsThreadPaused()
+{
+	return !_emuThread || _threadPaused;
+}
+void Emulator::SuspendDebugger(bool release)
+{
+	shared_ptr<Debugger> debugger = _debugger.lock();
+	if(debugger) {
+		debugger->SuspendDebugger(release);
+	}
+}
+void Emulator::WaitForLock()
+{
+	if(_lockCounter > 0) {
+		_runLock.Release();
+		_threadPaused = true;
+		while(_lockCounter > 0 && !_stopFlag) {}
+		shared_ptr<Debugger> debugger = _debugger.lock();
+		if(debugger) {
+			while(debugger->HasBreakRequest() && !_stopFlag) {}
+		}
+		if(!_stopFlag) {
+			_threadPaused = false;
+			_runLock.Acquire();
+		}
+	}
+}
+void Emulator::Serialize(ostream& out, bool includeSettings, int compressionLevel)
+{
+	Serializer s(SaveStateManager::FileFormatVersion, true);
+	if(includeSettings) {
+		SV(_settings);
+	}
+	s.Stream(_console, "");
+	s.SaveTo(out, compressionLevel);
+}
+DeserializeResult Emulator::Deserialize(istream& in, uint32_t fileFormatVersion, bool includeSettings, optional<ConsoleType> srcConsoleType, bool sendNotification)
+{
+	Serializer s(fileFormatVersion, false);
+	if(!s.LoadFrom(in)) {
+		return DeserializeResult::InvalidFile;
+	}
+	if(includeSettings) {
+		SV(_settings);
+	}
+	if(srcConsoleType.has_value() && srcConsoleType.value() != _console->GetConsoleType()) {
+		//Used to allow save states taken on GB/GBC/SGB to be loaded on any of the 3 systems
+		SaveStateCompatInfo compatInfo = _console->ValidateSaveStateCompatibility(srcConsoleType.value());
+		if(!compatInfo.IsCompatible) {
+			MessageManager::DisplayMessage("SaveStates", "SaveStateWrongSystem");
+			return DeserializeResult::SpecificError;
+		}
+		s.RemoveKeys(compatInfo.FieldsToRemove);
+		if(!compatInfo.PrefixToAdd.empty()) {
+			s.AddKeyPrefix(compatInfo.PrefixToAdd);
+		} else if(!compatInfo.PrefixToRemove.empty()) {
+			s.RemoveKeyPrefix(compatInfo.PrefixToRemove);
+		}
+		if(!s.IsValid()) {
+			MessageManager::DisplayMessage("SaveStates", "SaveStateWrongSystem");
+			return DeserializeResult::SpecificError;
+		}
+	}
+	s.Stream(_console, "");
+	if(s.HasError()) {
+		return DeserializeResult::SpecificError;
+	}
+	if(sendNotification) {
+		_notificationManager->SendNotification(ConsoleNotificationType::StateLoaded);
+	}
+	return DeserializeResult::Success;
+}
+BaseVideoFilter* Emulator::GetVideoFilter(bool getDefaultFilter)
+{
+	shared_ptr<IConsole> console = GetConsole();
+	return console ? console->GetVideoFilter(getDefaultFilter) : new SnesDefaultVideoFilter(this);
+}
+void Emulator::GetScreenRotationOverride(uint32_t& rotation)
+{
+	shared_ptr<IConsole> console = GetConsole();
+	if(console) {
+		console->GetScreenRotationOverride(rotation);
+	}
+}
+void Emulator::InputBarcode(uint64_t barcode, uint32_t digitCount)
+{
+	shared_ptr<IConsole> console = GetConsole();
+	if(console) {
+		shared_ptr<IBarcodeReader> reader = console->GetControlManager()->GetControlDevice<IBarcodeReader>();
+		if(reader) {
+			auto lock = AcquireLock();
+			reader->InputBarcode(barcode, digitCount);
+		}
+	}
+}
+void Emulator::ProcessTapeRecorderAction(TapeRecorderAction action, string filename)
+{
+	shared_ptr<IConsole> console = GetConsole();
+	if(console) {
+		shared_ptr<ITapeRecorder> recorder = console->GetControlManager()->GetControlDevice<ITapeRecorder>();
+		if(recorder) {
+			auto lock = AcquireLock();
+			recorder->ProcessTapeRecorderAction(action, filename);
+		}
+	}
+}
+ShortcutState Emulator::IsShortcutAllowed(EmulatorShortcut shortcut, uint32_t shortcutParam)
+{
+	shared_ptr<IConsole> console = GetConsole();
+	return console ? console->IsShortcutAllowed(shortcut, shortcutParam) : ShortcutState::Default;
+}
+bool Emulator::IsKeyboardConnected()
+{
+	shared_ptr<IConsole> console = GetConsole();
+	return console ? console->GetControlManager()->IsKeyboardConnected() : false;
+}
+void Emulator::BlockDebuggerRequests()
+{
+	auto lock = _debuggerLock.AcquireSafe();
+	_blockDebuggerRequestCount++;
+	if(_debugger) {
+		_debugger->ResetSuspendCounter();
+	}
+	while(_debugRequestCount > 0) {
+		std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(10));
+	}
+}
+DebuggerRequest Emulator::GetDebugger(bool autoInit)
+{
+	if(IsRunning() && _blockDebuggerRequestCount == 0) {
+		auto lock = _debuggerLock.AcquireSafe();
+		if(IsRunning() && _blockDebuggerRequestCount == 0) {
+			if(!_debugger && autoInit) {
+				InitDebugger();
+			}
+			return DebuggerRequest(this);
+		}
+	}
+	return DebuggerRequest(nullptr);
+}
+void Emulator::ResetDebugger(bool startDebugger)
+{
+	shared_ptr<Debugger> currentDbg = _debugger.lock();
+	if(currentDbg) {
+		currentDbg->SuspendDebugger(false);
+	}
+	if(_emulationThreadId == std::this_thread::get_id()) {
+		_debugger.reset(startDebugger ? new Debugger(this, _console.get()) : nullptr);
+	} else {
+		auto emuLock = AcquireLock();
+		_debugger.reset(startDebugger ? new Debugger(this, _console.get()) : nullptr);
+	}
+}
+void Emulator::InitDebugger()
+{
+	if(!_debugger) {
+		auto lock = _debuggerLock.AcquireSafe();
+		if(!_debugger) {
+			BlockDebuggerRequests();
+			ResetDebugger(true);
+			_blockDebuggerRequestCount--;
+			_paused = false;
+		}
+	}
+}
+void Emulator::StopDebugger()
+{
+	_paused = IsPaused();
+	if(_debugger) {
+		auto lock = _debuggerLock.AcquireSafe();
+		if(_debugger) {
+			BlockDebuggerRequests();
+			ResetDebugger();
+			_blockDebuggerRequestCount--;
+		}
+	}
+}
+bool Emulator::IsEmulationThread()
+{
+	return _emulationThreadId == _currentThreadId;
+}
+void Emulator::SetStopCode(int32_t stopCode)
+{
+	if(_stopCode != 0) {
+		return;
+	}
+	_stopCode = stopCode;
+	if(!_stopFlag && !_stopRequested) {
+		_stopRequested = true;
+		thread stopEmuTask([this]() {
+			Stop(true);
+		});
+		stopEmuTask.detach();
+	}
+}
+void Emulator::RegisterMemory(MemoryType type, void* memory, uint32_t size)
+{
+	_consoleMemory[(int)type] = { memory, size };
+}
+ConsoleMemoryInfo Emulator::GetMemory(MemoryType type)
+{
+	return _consoleMemory[(int)type];
+}
+AudioTrackInfo Emulator::GetAudioTrackInfo()
+{
+	shared_ptr<IConsole> console = GetConsole();
+	if(!console) {
+		return {};
+	}
+	AudioTrackInfo track = console->GetAudioTrackInfo();
+	AudioConfig audioCfg = _settings->GetAudioConfig();
+	if(track.Length <= 0 && audioCfg.AudioPlayerEnableTrackLength) {
+		track.Length = audioCfg.AudioPlayerTrackLength;
+		track.FadeLength = 1;
+	}
+	return track;
+}
+void Emulator::ProcessAudioPlayerAction(AudioPlayerActionParams p)
+{
+	shared_ptr<IConsole> console = GetConsole();
+	if(console) {
+		console->ProcessAudioPlayerAction(p);
+	}
+}
+void Emulator::ProcessEvent(EventType type, std::optional<CpuType> cpuType)
+{
+	if(_debugger) {
+		_debugger->ProcessEvent(type, cpuType);
+	}
+}
+template<CpuType cpuType>
+void Emulator::AddDebugEvent(DebugEventType evtType)
+{
+	if(_debugger) {
+		_debugger->GetEventManager(cpuType)->AddEvent(evtType);
+	}
+}
+void Emulator::BreakIfDebugging(CpuType sourceCpu, BreakSource source)
+{
+	if(_debugger) {
+		_debugger->BreakImmediately(sourceCpu, source);
+	}
+}
+template void Emulator::AddDebugEvent<CpuType::Snes>(DebugEventType evtType);
+template void Emulator::AddDebugEvent<CpuType::Gameboy>(DebugEventType evtType);
+template void Emulator::AddDebugEvent<CpuType::Nes>(DebugEventType evtType);
+template void Emulator::AddDebugEvent<CpuType::Pce>(DebugEventType evtType);
+thread_local std::thread::id Emulator::_currentThreadId = std::this_thread::get_id();
+```
+
+## File: Core/Shared/EmuSettings.cpp
+```cpp
+#include "pch.h"
+#include <random>
+#include "Shared/EmuSettings.h"
+#include "Shared/KeyManager.h"
+#include "Shared/MessageManager.h"
+#include "Shared/Emulator.h"
+#include "Shared/DebuggerRequest.h"
+#include "Shared/NotificationManager.h"
+#include "Utilities/FolderUtilities.h"
+#include "Utilities/Serializer.h"
+EmuSettings::EmuSettings(Emulator* emu)
+{
+	_emu = emu;
+	_flags = 0;
+	_debuggerFlags = 0;
+	std::random_device rd;
+	_mt = std::mt19937(rd());
+}
+void EmuSettings::CopySettings(EmuSettings& src)
+{
+	SetVideoConfig(src._video);
+	SetAudioConfig(src._audio);
+	SetInputConfig(src._input);
+	SetEmulationConfig(src._emulation);
+	SetPreferences(src._preferences);
+	SetAudioPlayerConfig(src._audioPlayer);
+	SetDebugConfig(src._debug);
+	SetGameConfig(src._game);
+	SetSnesConfig(src._snes);
+	SetGameboyConfig(src._gameboy);
+	SetNesConfig(src._nes);
+	SetPcEngineConfig(src._pce);
+	SetSmsConfig(src._sms);
+	SetGbaConfig(src._gba);
+}
+void EmuSettings::Serialize(Serializer& s)
+{
+	SV(_video.IntegerFpsMode);
+	SV(_emulation.RunAheadFrames);
+	SV(_game.DipSwitches);
+	switch(_emu->GetConsoleType()) {
+		case ConsoleType::Nes:
+			SV(_nes.ConsoleType);
+			SV(_nes.RamPowerOnState);
+			SV(_nes.RandomizeMapperPowerOnState);
+			SV(_nes.RandomizeCpuPpuAlignment);
+			SV(_nes.DisableOamAddrBug); SV(_nes.DisablePaletteRead); SV(_nes.DisablePpu2004Reads);
+			SV(_nes.DisableGameGenieBusConflicts); SV(_nes.DisablePpuReset); SV(_nes.EnableOamDecay);
+			SV(_nes.EnablePpu2000ScrollGlitch); SV(_nes.EnablePpu2006ScrollGlitch); SV(_nes.EnablePpuOamRowCorruption);
+			SV(_nes.RestrictPpuAccessOnFirstFrame);
+			SV(_nes.EnableCpuTestMode);
+			SV(_nes.EnableDmcSampleDuplicationGlitch);
+			SV(_nes.EnablePpuSpriteEvalBug);
+			SV(_nes.PpuExtraScanlinesAfterNmi); SV(_nes.PpuExtraScanlinesBeforeNmi);
+			SV(_nes.Region);
+			SV(_nes.LightDetectionRadius);
+			SV(_nes.Port1.Type); SV(_nes.Port1SubPorts[0].Type); SV(_nes.Port1SubPorts[1].Type); SV(_nes.Port1SubPorts[2].Type); SV(_nes.Port1SubPorts[3].Type);
+			SV(_nes.Port2.Type);
+			SV(_nes.ExpPort.Type); SV(_nes.ExpPortSubPorts[0].Type); SV(_nes.ExpPortSubPorts[1].Type); SV(_nes.ExpPortSubPorts[2].Type); SV(_nes.ExpPortSubPorts[3].Type);
+			break;
+		case ConsoleType::Snes:
+			SV(_snes.RamPowerOnState);
+			SV(_snes.EnableRandomPowerOnState);
+			SV(_snes.GsuClockSpeed);
+			SV(_snes.PpuExtraScanlinesAfterNmi); SV(_snes.PpuExtraScanlinesBeforeNmi);
+			SV(_snes.Region);
+			SV(_snes.Port1.Type); SV(_snes.Port1SubPorts[0].Type); SV(_snes.Port1SubPorts[1].Type); SV(_snes.Port1SubPorts[2].Type); SV(_snes.Port1SubPorts[3].Type);
+			SV(_snes.Port2.Type); SV(_snes.Port2SubPorts[0].Type); SV(_snes.Port2SubPorts[1].Type); SV(_snes.Port2SubPorts[2].Type); SV(_snes.Port2SubPorts[3].Type);
+			SV(_snes.BsxCustomDate);
+			SV(_snes.SpcClockSpeedAdjustment);
+			if(_emu->GetRomInfo().Format == RomFormat::Gb) {
+				SV(_gameboy.RamPowerOnState);
+				SV(_gameboy.Controller.Type);
+				SV(_gameboy.Model);
+				SV(_gameboy.UseSgb2);
+			}
+			break;
+		case ConsoleType::Gameboy:
+			SV(_gameboy.RamPowerOnState);
+			SV(_gameboy.Controller.Type);
+			SV(_gameboy.Model);
+			SV(_gameboy.UseSgb2);
+			break;
+		case ConsoleType::PcEngine:
+			SV(_pce.RamPowerOnState);
+			SV(_pce.EnableRandomPowerOnState);
+			SV(_pce.CdRomType);
+			SV(_pce.ConsoleType);
+			SV(_pce.DisableCdRomSaveRamForHuCardGames);
+			SV(_pce.EnableCdRomForHuCardGames);
+			SV(_pce.Port1.Type);
+			SV(_pce.Port1SubPorts[0].Type);
+			SV(_pce.Port1SubPorts[1].Type);
+			SV(_pce.Port1SubPorts[2].Type);
+			SV(_pce.Port1SubPorts[3].Type);
+			SV(_pce.Port1SubPorts[4].Type);
+			break;
+		case ConsoleType::Sms:
+			SV(_sms.RamPowerOnState);
+			SV(_sms.Port1.Type);
+			SV(_sms.Port2.Type);
+			SV(_sms.Region);
+			SV(_sms.Revision);
+			SV(_sms.EnableFmAudio);
+			break;
+		case ConsoleType::Gba:
+			SV(_gba.RamPowerOnState);
+			SV(_gba.OverclockScanlineCount);
+			SV(_gba.Controller.Type);
+			break;
+		case ConsoleType::Ws:
+			break;
+		default:
+			throw std::runtime_error("unsupported console type");
+	}
+}
+uint32_t EmuSettings::GetVersion()
+{
+	uint16_t major = 2;
+	uint8_t minor = 1;
+	uint8_t revision = 1;
+	return (major << 16) | (minor << 8) | revision;
+}
+string EmuSettings::GetVersionString()
+{
+	uint32_t version = GetVersion();
+	return std::to_string(version >> 16) + "." + std::to_string((version >> 8) & 0xFF) + "." + std::to_string(version & 0xFF);
+}
+void EmuSettings::ProcessString(string & str, const char ** strPointer)
+{
+	if(*strPointer) {
+		str = *strPointer;
+	} else {
+		str.clear();
+	}
+	*strPointer = str.c_str();
+}
+void EmuSettings::SetVideoConfig(VideoConfig& config)
+{
+	_video = config;
+}
+VideoConfig& EmuSettings::GetVideoConfig()
+{
+	return _video;
+}
+void EmuSettings::SetAudioConfig(AudioConfig& config)
+{
+	_audio = config;
+	ProcessString(_audioDevice, &_audio.AudioDevice);
+}
+AudioConfig& EmuSettings::GetAudioConfig()
+{
+	return _audio;
+}
+void EmuSettings::SetInputConfig(InputConfig& config)
+{
+	_input = config;
+}
+InputConfig& EmuSettings::GetInputConfig()
+{
+	return _input;
+}
+void EmuSettings::SetEmulationConfig(EmulationConfig& config)
+{
+	_emulation = config;
+}
+EmulationConfig& EmuSettings::GetEmulationConfig()
+{
+	return _emulation;
+}
+void EmuSettings::SetSnesConfig(SnesConfig& config)
+{
+	_snes = config;
+}
+SnesConfig& EmuSettings::GetSnesConfig()
+{
+	return _snes;
+}
+void EmuSettings::SetNesConfig(NesConfig& config)
+{
+	_nes = config;
+}
+NesConfig& EmuSettings::GetNesConfig()
+{
+	return _nes;
+}
+void EmuSettings::SetGameboyConfig(GameboyConfig& config)
+{
+	_gameboy = config;
+}
+GameboyConfig& EmuSettings::GetGameboyConfig()
+{
+	return _gameboy;
+}
+void EmuSettings::SetGbaConfig(GbaConfig& config)
+{
+	_gba = config;
+}
+GbaConfig& EmuSettings::GetGbaConfig()
+{
+	return _gba;
+}
+void EmuSettings::SetPcEngineConfig(PcEngineConfig& config)
+{
+	_pce = config;
+}
+PcEngineConfig& EmuSettings::GetPcEngineConfig()
+{
+	return _pce;
+}
+void EmuSettings::SetSmsConfig(SmsConfig& config)
+{
+	_sms = config;
+}
+SmsConfig& EmuSettings::GetSmsConfig()
+{
+	return _sms;
+}
+void EmuSettings::SetCvConfig(CvConfig& config)
+{
+	_cv = config;
+}
+CvConfig& EmuSettings::GetCvConfig()
+{
+	return _cv;
+}
+void EmuSettings::SetWsConfig(WsConfig& config)
+{
+	_ws = config;
+}
+WsConfig& EmuSettings::GetWsConfig()
+{
+	return _ws;
+}
+void EmuSettings::SetGameConfig(GameConfig& config)
+{
+	_game = config;
+}
+GameConfig& EmuSettings::GetGameConfig()
+{
+	return _game;
+}
+void EmuSettings::SetPreferences(PreferencesConfig& config)
+{
+	MessageManager::SetOptions(!config.DisableOsd, CheckFlag(EmulationFlags::OutputToStdout));
+	_preferences = config;
+	ProcessString(_saveFolder, &_preferences.SaveFolderOverride);
+	ProcessString(_saveStateFolder, &_preferences.SaveStateFolderOverride);
+	ProcessString(_screenshotFolder, &_preferences.ScreenshotFolderOverride);
+	FolderUtilities::SetFolderOverrides(
+		_saveFolder,
+		_saveStateFolder,
+		_screenshotFolder,
+		""
+	);
+}
+PreferencesConfig& EmuSettings::GetPreferences()
+{
+	return _preferences;
+}
+void EmuSettings::SetAudioPlayerConfig(AudioPlayerConfig& config)
+{
+	_audioPlayer = config;
+}
+AudioPlayerConfig& EmuSettings::GetAudioPlayerConfig()
+{
+	return _audioPlayer;
+}
+void EmuSettings::SetDebugConfig(DebugConfig& config)
+{
+	_debug = config;
+	DebuggerRequest req = _emu->GetDebugger(false);
+	Debugger* dbg = req.GetDebugger();
+	if(dbg) {
+		dbg->ProcessConfigChange();
+	}
+}
+DebugConfig& EmuSettings::GetDebugConfig()
+{
+	return _debug;
+}
+void EmuSettings::ClearShortcutKeys()
+{
+	_emulatorKeys[0].clear();
+	_emulatorKeys[1].clear();
+	_emulatorKeys[2].clear();
+	_shortcutSupersets[0].clear();
+	_shortcutSupersets[1].clear();
+	_shortcutSupersets[2].clear();
+	//Add Alt-F4 as a fake shortcut to prevent Alt-F4 from triggering Alt or F4 key bindings. (e.g load save state 4)
+	KeyCombination keyComb;
+	keyComb.Key1 = KeyManager::GetKeyCode("Left Alt");
+	keyComb.Key2 = KeyManager::GetKeyCode("F4");
+	SetShortcutKey(EmulatorShortcut::Exit, keyComb, 2);
+}
+void EmuSettings::SetShortcutKey(EmulatorShortcut shortcut, KeyCombination keyCombination, int keySetIndex)
+{
+	_emulatorKeys[keySetIndex][(uint32_t)shortcut] = keyCombination;
+	for(int i = 0; i < 3; i++) {
+		for(std::pair<const uint32_t, KeyCombination> &kvp : _emulatorKeys[i]) {
+			if(keyCombination.IsSubsetOf(kvp.second)) {
+				_shortcutSupersets[keySetIndex][(uint32_t)shortcut].push_back(kvp.second);
+			} else if(kvp.second.IsSubsetOf(keyCombination)) {
+				_shortcutSupersets[i][kvp.first].push_back(keyCombination);
+			}
+		}
+	}
+}
+void EmuSettings::SetShortcutKeys(vector<ShortcutKeyInfo> shortcuts)
+{
+	auto lock = _updateShortcutsLock.AcquireSafe();
+	ClearShortcutKeys();
+	for(ShortcutKeyInfo &shortcut : shortcuts) {
+		if(_emulatorKeys[0][(uint32_t)shortcut.Shortcut].GetKeys().empty()) {
+			SetShortcutKey(shortcut.Shortcut, shortcut.Keys, 0);
+		} else {
+			SetShortcutKey(shortcut.Shortcut, shortcut.Keys, 1);
+		}
+	}
+}
+KeyCombination EmuSettings::GetShortcutKey(EmulatorShortcut shortcut, int keySetIndex)
+{
+	auto lock = _updateShortcutsLock.AcquireSafe();
+	auto result = _emulatorKeys[keySetIndex].find((int)shortcut);
+	if(result != _emulatorKeys[keySetIndex].end()) {
+		return result->second;
+	}
+	return {};
+}
+vector<KeyCombination> EmuSettings::GetShortcutSupersets(EmulatorShortcut shortcut, int keySetIndex)
+{
+	auto lock = _updateShortcutsLock.AcquireSafe();
+	return _shortcutSupersets[keySetIndex][(uint32_t)shortcut];
+}
+OverscanDimensions EmuSettings::GetOverscan()
+{
+	RomFormat romFormat = _emu->GetRomInfo().Format;
+	switch(romFormat) {
+		case RomFormat::Spc:
+		case RomFormat::Gbs:
+		case RomFormat::Nsf:
+		case RomFormat::PceHes:
+			return OverscanDimensions {};
+		case RomFormat::Gb:
+			if(_emu->GetConsoleType() == ConsoleType::Snes && _emu->GetSettings()->GetGameboyConfig().HideSgbBorders) {
+				OverscanDimensions overscan = {};
+				overscan.Top =  46;
+				overscan.Bottom = 49;
+				overscan.Left = 48;
+				overscan.Right = 48;
+				return overscan;
+			}
+	}
+	if(_game.OverrideOverscan) {
+		return _game.Overscan;
+	}
+	switch(_emu->GetConsoleType()) {
+		case ConsoleType::Snes: return _snes.Overscan;
+		case ConsoleType::Nes: return _emu->GetRegion() == ConsoleRegion::Ntsc ? _nes.NtscOverscan : _nes.PalOverscan;
+		case ConsoleType::PcEngine: return _pce.Overscan;
+		case ConsoleType::Sms:
+			if(romFormat == RomFormat::ColecoVision) {
+				return { 0, 0, 24, 24 };
+			} else if(romFormat == RomFormat::GameGear) {
+				return _sms.GameGearOverscan;
+			} else {
+				return  _emu->GetRegion() == ConsoleRegion::Ntsc ? _sms.NtscOverscan : _sms.PalOverscan;
+			}
+		case ConsoleType::Gameboy:
+		case ConsoleType::Gba:
+		case ConsoleType::Ws:
+			break;
+	}
+	return OverscanDimensions {};
+}
+uint32_t EmuSettings::GetEmulationSpeed()
+{
+	if(CheckFlag(EmulationFlags::MaximumSpeed)) {
+		return 0;
+	} else if(CheckFlag(EmulationFlags::Turbo)) {
+		return _emulation.TurboSpeed;
+	} else if(CheckFlag(EmulationFlags::Rewind)) {
+		return _emulation.RewindSpeed;
+	} else {
+		return _emulation.EmulationSpeed;
+	}
+}
+double EmuSettings::GetAspectRatio(ConsoleRegion region, FrameInfo baseFrameSize)
+{
+	double screenAspectRatio = (double)baseFrameSize.Width / baseFrameSize.Height;
+	switch(_video.AspectRatio) {
+		case VideoAspectRatio::NoStretching: return screenAspectRatio;
+		case VideoAspectRatio::Auto:
+			if(_emu->GetConsoleType() == ConsoleType::Gameboy || _emu->GetConsoleType() == ConsoleType::Gba || _emu->GetConsoleType() == ConsoleType::Ws) {
+				return screenAspectRatio;
+			} else if(_emu->GetRomInfo().Format == RomFormat::GameGear) {
+				return screenAspectRatio * (6.0 / 5.0);
+			}
+			return screenAspectRatio * ((region == ConsoleRegion::Pal || region == ConsoleRegion::Dendy) ? (11.0 / 8.0) : (8.0 / 7.0));
+		case VideoAspectRatio::NTSC: return screenAspectRatio * 8.0 / 7.0;
+		case VideoAspectRatio::PAL: return screenAspectRatio * 11.0 / 8.0;
+		case VideoAspectRatio::Standard: return 4.0 / 3.0;
+		case VideoAspectRatio::Widescreen: return 16.0 / 9.0;
+		case VideoAspectRatio::Custom: return _video.CustomAspectRatio;
+	}
+	return 0.0;
+}
+void EmuSettings::SetFlag(EmulationFlags flag)
+{
+	if((_flags & (int)flag) == 0) {
+		_flags |= (int)flag;
+	}
+}
+void EmuSettings::SetFlagState(EmulationFlags flag, bool enabled)
+{
+	if(enabled) {
+		SetFlag(flag);
+	} else {
+		ClearFlag(flag);
+	}
+}
+void EmuSettings::ClearFlag(EmulationFlags flag)
+{
+	if((_flags & (int)flag) != 0) {
+		_flags &= ~(int)flag;
+	}
+}
+bool EmuSettings::CheckFlag(EmulationFlags flag)
+{
+	return (_flags & (int)flag) != 0;
+}
+void EmuSettings::SetDebuggerFlag(DebuggerFlags flag, bool enabled)
+{
+	if(enabled) {
+		if((_debuggerFlags & (uint64_t)flag) == 0) {
+			_debuggerFlags |= (uint64_t)flag;
+		}
+	} else {
+		if((_debuggerFlags & (uint64_t)flag) != 0) {
+			_debuggerFlags &= ~(uint64_t)flag;
+		}
+	}
+	DebuggerRequest req = _emu->GetDebugger(false);
+	Debugger* dbg = req.GetDebugger();
+	if(dbg) {
+		dbg->ProcessConfigChange();
+	}
+}
+bool EmuSettings::CheckDebuggerFlag(DebuggerFlags flag)
+{
+	return (_debuggerFlags & (uint64_t)flag) != 0;
+}
+bool EmuSettings::HasRandomPowerOnState(ConsoleType consoleType)
+{
+	switch(consoleType) {
+		case ConsoleType::Snes: return _snes.RamPowerOnState == RamState::Random || _snes.EnableRandomPowerOnState;
+		case ConsoleType::Gameboy: return _gameboy.RamPowerOnState == RamState::Random;
+		case ConsoleType::Nes: return _nes.RamPowerOnState == RamState::Random || _nes.RandomizeCpuPpuAlignment || _nes.RandomizeMapperPowerOnState;
+		case ConsoleType::PcEngine: return _pce.RamPowerOnState == RamState::Random || _pce.EnableRandomPowerOnState;
+		case ConsoleType::Sms: return _sms.RamPowerOnState == RamState::Random;
+		case ConsoleType::Gba: return _gba.RamPowerOnState == RamState::Random;
+	}
+	return false;
+}
+void EmuSettings::InitializeRam(RamState state, void* data, uint32_t length)
+{
+	switch(state) {
+		default:
+		case RamState::AllZeros: memset(data, 0, length); break;
+		case RamState::AllOnes: memset(data, 0xFF, length); break;
+		case RamState::Random:
+			std::uniform_int_distribution<uint64_t> dist(0, std::numeric_limits<uint64_t>::max());
+			uint32_t i = 0;
+			while(i < length) {
+				uint64_t randomData = dist(_mt);
+				for(int j = 0; j < 8 && i < length; j++) {
+					((uint8_t*)data)[i] = (uint8_t)(randomData >> (8*j));
+					i++;
+				}
+			}
+			break;
+	}
+}
+int EmuSettings::GetRandomValue(int maxValue)
+{
+	std::uniform_int_distribution<> dist(0, maxValue);
+	return dist(_mt);
+}
+bool EmuSettings::GetRandomBool()
+{
+	return GetRandomValue(1) == 1;
+}
+bool EmuSettings::IsInputEnabled()
+{
+	return !CheckFlag(EmulationFlags::InBackground) || _preferences.AllowBackgroundInput;
+}
+double EmuSettings::GetControllerDeadzoneRatio()
+{
+	switch(_input.ControllerDeadzoneSize) {
+		case 0: return 0.5;
+		case 1: return 0.75;
+		case 2: return 1;
+		case 3: return 1.25;
+		case 4: return 1.5;
+	}
+	return 1;
+}
+```
+
+## File: README.md
+```markdown
+Mesen2 (MCP-Enabled Fork)
+
+This repository is a personal fork of Mesen2, a multi-system emulator
+(NES, SNES, Game Boy, Game Boy Advance, PC Engine, SMS/Game Gear, WonderSwan)
+for Windows, Linux and macOS.
+
+This fork integrates a native MCP server directly into the emulator core
+to enable programmatic control without relying on external bridge scripts.
+
+This is not an official Mesen release.
+
+About This Fork
+
+This version replaces the previous external Python/Lua bridge with a
+native MCP server implementation inside the emulator core.
+
+Modified / Added components:
+
+Core/Shared/McpServer.cpp
+
+Core/Shared/McpServer.h
+
+The objective is to allow deterministic, direct programmatic control of the
+emulator from external tooling, including automation systems and LLM-driven workflows.
+
+Requirements
+Windows
+
+Visual Studio 2022
+
+MSVC v143 toolset
+
+.NET 8 SDK
+
+x64 build tools
+
+Linux
+
+Clang or GCC with C++17 support
+
+SDL2
+
+.NET 8 SDK
+
+macOS
+
+Clang with C++17 support
+
+SDL2
+
+.NET 8 SDK
+
+Build
+Windows
+dotnet restore Mesen.sln
+msbuild Mesen.sln /p:Configuration=Release /p:Platform=x64
+
+Linux / macOS
+make
+
+Continuous Integration
+
+This repository includes a minimal GitHub Actions workflow that validates
+that the solution builds successfully on a clean Windows environment.
+
+Only the latest push is built; previous runs are automatically canceled.
+
+Project Structure
+
+Core/ — Emulator core
+
+InteropDLL/ — Native interop layer
+
+UI/ — .NET-based user interface
+
+Core/Shared/McpServer.* — Native MCP server integration
+
+License
+
+This project is based on Mesen2 and remains licensed under the GPL v3.
+
+Original project copyright:
+Copyright (C) 2014–2025 Sour
+
+This fork maintains GPL compliance and distributes modifications
+under the same license terms.
+
+Full license text:
+http://www.gnu.org/licenses/gpl-3.0.en.html
 ```
 
 ## File: Core/Core.vcxproj
@@ -28194,517 +28524,6 @@ enum class DebuggerFlags
 </Project>
 ```
 
-## File: Core/Shared/EmuSettings.cpp
-```cpp
-#include "pch.h"
-#include <random>
-#include "Shared/EmuSettings.h"
-#include "Shared/KeyManager.h"
-#include "Shared/MessageManager.h"
-#include "Shared/Emulator.h"
-#include "Shared/DebuggerRequest.h"
-#include "Shared/NotificationManager.h"
-#include "Utilities/FolderUtilities.h"
-#include "Utilities/Serializer.h"
-EmuSettings::EmuSettings(Emulator* emu)
-{
-	_emu = emu;
-	_flags = 0;
-	_debuggerFlags = 0;
-	std::random_device rd;
-	_mt = std::mt19937(rd());
-}
-void EmuSettings::CopySettings(EmuSettings& src)
-{
-	SetVideoConfig(src._video);
-	SetAudioConfig(src._audio);
-	SetInputConfig(src._input);
-	SetEmulationConfig(src._emulation);
-	SetPreferences(src._preferences);
-	SetAudioPlayerConfig(src._audioPlayer);
-	SetDebugConfig(src._debug);
-	SetGameConfig(src._game);
-	SetSnesConfig(src._snes);
-	SetGameboyConfig(src._gameboy);
-	SetNesConfig(src._nes);
-	SetPcEngineConfig(src._pce);
-	SetSmsConfig(src._sms);
-	SetGbaConfig(src._gba);
-}
-void EmuSettings::Serialize(Serializer& s)
-{
-	SV(_video.IntegerFpsMode);
-	SV(_emulation.RunAheadFrames);
-	SV(_game.DipSwitches);
-	switch(_emu->GetConsoleType()) {
-		case ConsoleType::Nes:
-			SV(_nes.ConsoleType);
-			SV(_nes.RamPowerOnState);
-			SV(_nes.RandomizeMapperPowerOnState);
-			SV(_nes.RandomizeCpuPpuAlignment);
-			SV(_nes.DisableOamAddrBug); SV(_nes.DisablePaletteRead); SV(_nes.DisablePpu2004Reads);
-			SV(_nes.DisableGameGenieBusConflicts); SV(_nes.DisablePpuReset); SV(_nes.EnableOamDecay);
-			SV(_nes.EnablePpu2000ScrollGlitch); SV(_nes.EnablePpu2006ScrollGlitch); SV(_nes.EnablePpuOamRowCorruption);
-			SV(_nes.RestrictPpuAccessOnFirstFrame);
-			SV(_nes.EnableCpuTestMode);
-			SV(_nes.EnableDmcSampleDuplicationGlitch);
-			SV(_nes.EnablePpuSpriteEvalBug);
-			SV(_nes.PpuExtraScanlinesAfterNmi); SV(_nes.PpuExtraScanlinesBeforeNmi);
-			SV(_nes.Region);
-			SV(_nes.LightDetectionRadius);
-			SV(_nes.Port1.Type); SV(_nes.Port1SubPorts[0].Type); SV(_nes.Port1SubPorts[1].Type); SV(_nes.Port1SubPorts[2].Type); SV(_nes.Port1SubPorts[3].Type);
-			SV(_nes.Port2.Type);
-			SV(_nes.ExpPort.Type); SV(_nes.ExpPortSubPorts[0].Type); SV(_nes.ExpPortSubPorts[1].Type); SV(_nes.ExpPortSubPorts[2].Type); SV(_nes.ExpPortSubPorts[3].Type);
-			break;
-		case ConsoleType::Snes:
-			SV(_snes.RamPowerOnState);
-			SV(_snes.EnableRandomPowerOnState);
-			SV(_snes.GsuClockSpeed);
-			SV(_snes.PpuExtraScanlinesAfterNmi); SV(_snes.PpuExtraScanlinesBeforeNmi);
-			SV(_snes.Region);
-			SV(_snes.Port1.Type); SV(_snes.Port1SubPorts[0].Type); SV(_snes.Port1SubPorts[1].Type); SV(_snes.Port1SubPorts[2].Type); SV(_snes.Port1SubPorts[3].Type);
-			SV(_snes.Port2.Type); SV(_snes.Port2SubPorts[0].Type); SV(_snes.Port2SubPorts[1].Type); SV(_snes.Port2SubPorts[2].Type); SV(_snes.Port2SubPorts[3].Type);
-			SV(_snes.BsxCustomDate);
-			SV(_snes.SpcClockSpeedAdjustment);
-			if(_emu->GetRomInfo().Format == RomFormat::Gb) {
-				SV(_gameboy.RamPowerOnState);
-				SV(_gameboy.Controller.Type);
-				SV(_gameboy.Model);
-				SV(_gameboy.UseSgb2);
-			}
-			break;
-		case ConsoleType::Gameboy:
-			SV(_gameboy.RamPowerOnState);
-			SV(_gameboy.Controller.Type);
-			SV(_gameboy.Model);
-			SV(_gameboy.UseSgb2);
-			break;
-		case ConsoleType::PcEngine:
-			SV(_pce.RamPowerOnState);
-			SV(_pce.EnableRandomPowerOnState);
-			SV(_pce.CdRomType);
-			SV(_pce.ConsoleType);
-			SV(_pce.DisableCdRomSaveRamForHuCardGames);
-			SV(_pce.EnableCdRomForHuCardGames);
-			SV(_pce.Port1.Type);
-			SV(_pce.Port1SubPorts[0].Type);
-			SV(_pce.Port1SubPorts[1].Type);
-			SV(_pce.Port1SubPorts[2].Type);
-			SV(_pce.Port1SubPorts[3].Type);
-			SV(_pce.Port1SubPorts[4].Type);
-			break;
-		case ConsoleType::Sms:
-			SV(_sms.RamPowerOnState);
-			SV(_sms.Port1.Type);
-			SV(_sms.Port2.Type);
-			SV(_sms.Region);
-			SV(_sms.Revision);
-			SV(_sms.EnableFmAudio);
-			break;
-		case ConsoleType::Gba:
-			SV(_gba.RamPowerOnState);
-			SV(_gba.OverclockScanlineCount);
-			SV(_gba.Controller.Type);
-			break;
-		case ConsoleType::Ws:
-			break;
-		default:
-			throw std::runtime_error("unsupported console type");
-	}
-}
-uint32_t EmuSettings::GetVersion()
-{
-	uint16_t major = 2;
-	uint8_t minor = 1;
-	uint8_t revision = 1;
-	return (major << 16) | (minor << 8) | revision;
-}
-string EmuSettings::GetVersionString()
-{
-	uint32_t version = GetVersion();
-	return std::to_string(version >> 16) + "." + std::to_string((version >> 8) & 0xFF) + "." + std::to_string(version & 0xFF);
-}
-void EmuSettings::ProcessString(string & str, const char ** strPointer)
-{
-	if(*strPointer) {
-		str = *strPointer;
-	} else {
-		str.clear();
-	}
-	*strPointer = str.c_str();
-}
-void EmuSettings::SetVideoConfig(VideoConfig& config)
-{
-	_video = config;
-}
-VideoConfig& EmuSettings::GetVideoConfig()
-{
-	return _video;
-}
-void EmuSettings::SetAudioConfig(AudioConfig& config)
-{
-	_audio = config;
-	ProcessString(_audioDevice, &_audio.AudioDevice);
-}
-AudioConfig& EmuSettings::GetAudioConfig()
-{
-	return _audio;
-}
-void EmuSettings::SetInputConfig(InputConfig& config)
-{
-	_input = config;
-}
-InputConfig& EmuSettings::GetInputConfig()
-{
-	return _input;
-}
-void EmuSettings::SetEmulationConfig(EmulationConfig& config)
-{
-	_emulation = config;
-}
-EmulationConfig& EmuSettings::GetEmulationConfig()
-{
-	return _emulation;
-}
-void EmuSettings::SetSnesConfig(SnesConfig& config)
-{
-	_snes = config;
-}
-SnesConfig& EmuSettings::GetSnesConfig()
-{
-	return _snes;
-}
-void EmuSettings::SetNesConfig(NesConfig& config)
-{
-	_nes = config;
-}
-NesConfig& EmuSettings::GetNesConfig()
-{
-	return _nes;
-}
-void EmuSettings::SetGameboyConfig(GameboyConfig& config)
-{
-	_gameboy = config;
-}
-GameboyConfig& EmuSettings::GetGameboyConfig()
-{
-	return _gameboy;
-}
-void EmuSettings::SetGbaConfig(GbaConfig& config)
-{
-	_gba = config;
-}
-GbaConfig& EmuSettings::GetGbaConfig()
-{
-	return _gba;
-}
-void EmuSettings::SetPcEngineConfig(PcEngineConfig& config)
-{
-	_pce = config;
-}
-PcEngineConfig& EmuSettings::GetPcEngineConfig()
-{
-	return _pce;
-}
-void EmuSettings::SetSmsConfig(SmsConfig& config)
-{
-	_sms = config;
-}
-SmsConfig& EmuSettings::GetSmsConfig()
-{
-	return _sms;
-}
-void EmuSettings::SetCvConfig(CvConfig& config)
-{
-	_cv = config;
-}
-CvConfig& EmuSettings::GetCvConfig()
-{
-	return _cv;
-}
-void EmuSettings::SetWsConfig(WsConfig& config)
-{
-	_ws = config;
-}
-WsConfig& EmuSettings::GetWsConfig()
-{
-	return _ws;
-}
-void EmuSettings::SetGameConfig(GameConfig& config)
-{
-	_game = config;
-}
-GameConfig& EmuSettings::GetGameConfig()
-{
-	return _game;
-}
-void EmuSettings::SetPreferences(PreferencesConfig& config)
-{
-	MessageManager::SetOptions(!config.DisableOsd, CheckFlag(EmulationFlags::OutputToStdout));
-	_preferences = config;
-	ProcessString(_saveFolder, &_preferences.SaveFolderOverride);
-	ProcessString(_saveStateFolder, &_preferences.SaveStateFolderOverride);
-	ProcessString(_screenshotFolder, &_preferences.ScreenshotFolderOverride);
-	FolderUtilities::SetFolderOverrides(
-		_saveFolder,
-		_saveStateFolder,
-		_screenshotFolder,
-		""
-	);
-}
-PreferencesConfig& EmuSettings::GetPreferences()
-{
-	return _preferences;
-}
-void EmuSettings::SetAudioPlayerConfig(AudioPlayerConfig& config)
-{
-	_audioPlayer = config;
-}
-AudioPlayerConfig& EmuSettings::GetAudioPlayerConfig()
-{
-	return _audioPlayer;
-}
-void EmuSettings::SetDebugConfig(DebugConfig& config)
-{
-	_debug = config;
-	DebuggerRequest req = _emu->GetDebugger(false);
-	Debugger* dbg = req.GetDebugger();
-	if(dbg) {
-		dbg->ProcessConfigChange();
-	}
-}
-DebugConfig& EmuSettings::GetDebugConfig()
-{
-	return _debug;
-}
-void EmuSettings::ClearShortcutKeys()
-{
-	_emulatorKeys[0].clear();
-	_emulatorKeys[1].clear();
-	_emulatorKeys[2].clear();
-	_shortcutSupersets[0].clear();
-	_shortcutSupersets[1].clear();
-	_shortcutSupersets[2].clear();
-	//Add Alt-F4 as a fake shortcut to prevent Alt-F4 from triggering Alt or F4 key bindings. (e.g load save state 4)
-	KeyCombination keyComb;
-	keyComb.Key1 = KeyManager::GetKeyCode("Left Alt");
-	keyComb.Key2 = KeyManager::GetKeyCode("F4");
-	SetShortcutKey(EmulatorShortcut::Exit, keyComb, 2);
-}
-void EmuSettings::SetShortcutKey(EmulatorShortcut shortcut, KeyCombination keyCombination, int keySetIndex)
-{
-	_emulatorKeys[keySetIndex][(uint32_t)shortcut] = keyCombination;
-	for(int i = 0; i < 3; i++) {
-		for(std::pair<const uint32_t, KeyCombination> &kvp : _emulatorKeys[i]) {
-			if(keyCombination.IsSubsetOf(kvp.second)) {
-				_shortcutSupersets[keySetIndex][(uint32_t)shortcut].push_back(kvp.second);
-			} else if(kvp.second.IsSubsetOf(keyCombination)) {
-				_shortcutSupersets[i][kvp.first].push_back(keyCombination);
-			}
-		}
-	}
-}
-void EmuSettings::SetShortcutKeys(vector<ShortcutKeyInfo> shortcuts)
-{
-	auto lock = _updateShortcutsLock.AcquireSafe();
-	ClearShortcutKeys();
-	for(ShortcutKeyInfo &shortcut : shortcuts) {
-		if(_emulatorKeys[0][(uint32_t)shortcut.Shortcut].GetKeys().empty()) {
-			SetShortcutKey(shortcut.Shortcut, shortcut.Keys, 0);
-		} else {
-			SetShortcutKey(shortcut.Shortcut, shortcut.Keys, 1);
-		}
-	}
-}
-KeyCombination EmuSettings::GetShortcutKey(EmulatorShortcut shortcut, int keySetIndex)
-{
-	auto lock = _updateShortcutsLock.AcquireSafe();
-	auto result = _emulatorKeys[keySetIndex].find((int)shortcut);
-	if(result != _emulatorKeys[keySetIndex].end()) {
-		return result->second;
-	}
-	return {};
-}
-vector<KeyCombination> EmuSettings::GetShortcutSupersets(EmulatorShortcut shortcut, int keySetIndex)
-{
-	auto lock = _updateShortcutsLock.AcquireSafe();
-	return _shortcutSupersets[keySetIndex][(uint32_t)shortcut];
-}
-OverscanDimensions EmuSettings::GetOverscan()
-{
-	RomFormat romFormat = _emu->GetRomInfo().Format;
-	switch(romFormat) {
-		case RomFormat::Spc:
-		case RomFormat::Gbs:
-		case RomFormat::Nsf:
-		case RomFormat::PceHes:
-			return OverscanDimensions {};
-		case RomFormat::Gb:
-			if(_emu->GetConsoleType() == ConsoleType::Snes && _emu->GetSettings()->GetGameboyConfig().HideSgbBorders) {
-				OverscanDimensions overscan = {};
-				overscan.Top =  46;
-				overscan.Bottom = 49;
-				overscan.Left = 48;
-				overscan.Right = 48;
-				return overscan;
-			}
-	}
-	if(_game.OverrideOverscan) {
-		return _game.Overscan;
-	}
-	switch(_emu->GetConsoleType()) {
-		case ConsoleType::Snes: return _snes.Overscan;
-		case ConsoleType::Nes: return _emu->GetRegion() == ConsoleRegion::Ntsc ? _nes.NtscOverscan : _nes.PalOverscan;
-		case ConsoleType::PcEngine: return _pce.Overscan;
-		case ConsoleType::Sms:
-			if(romFormat == RomFormat::ColecoVision) {
-				return { 0, 0, 24, 24 };
-			} else if(romFormat == RomFormat::GameGear) {
-				return _sms.GameGearOverscan;
-			} else {
-				return  _emu->GetRegion() == ConsoleRegion::Ntsc ? _sms.NtscOverscan : _sms.PalOverscan;
-			}
-		case ConsoleType::Gameboy:
-		case ConsoleType::Gba:
-		case ConsoleType::Ws:
-			break;
-	}
-	return OverscanDimensions {};
-}
-uint32_t EmuSettings::GetEmulationSpeed()
-{
-	if(CheckFlag(EmulationFlags::MaximumSpeed)) {
-		return 0;
-	} else if(CheckFlag(EmulationFlags::Turbo)) {
-		return _emulation.TurboSpeed;
-	} else if(CheckFlag(EmulationFlags::Rewind)) {
-		return _emulation.RewindSpeed;
-	} else {
-		return _emulation.EmulationSpeed;
-	}
-}
-double EmuSettings::GetAspectRatio(ConsoleRegion region, FrameInfo baseFrameSize)
-{
-	double screenAspectRatio = (double)baseFrameSize.Width / baseFrameSize.Height;
-	switch(_video.AspectRatio) {
-		case VideoAspectRatio::NoStretching: return screenAspectRatio;
-		case VideoAspectRatio::Auto:
-			if(_emu->GetConsoleType() == ConsoleType::Gameboy || _emu->GetConsoleType() == ConsoleType::Gba || _emu->GetConsoleType() == ConsoleType::Ws) {
-				return screenAspectRatio;
-			} else if(_emu->GetRomInfo().Format == RomFormat::GameGear) {
-				return screenAspectRatio * (6.0 / 5.0);
-			}
-			return screenAspectRatio * ((region == ConsoleRegion::Pal || region == ConsoleRegion::Dendy) ? (11.0 / 8.0) : (8.0 / 7.0));
-		case VideoAspectRatio::NTSC: return screenAspectRatio * 8.0 / 7.0;
-		case VideoAspectRatio::PAL: return screenAspectRatio * 11.0 / 8.0;
-		case VideoAspectRatio::Standard: return 4.0 / 3.0;
-		case VideoAspectRatio::Widescreen: return 16.0 / 9.0;
-		case VideoAspectRatio::Custom: return _video.CustomAspectRatio;
-	}
-	return 0.0;
-}
-void EmuSettings::SetFlag(EmulationFlags flag)
-{
-	if((_flags & (int)flag) == 0) {
-		_flags |= (int)flag;
-	}
-}
-void EmuSettings::SetFlagState(EmulationFlags flag, bool enabled)
-{
-	if(enabled) {
-		SetFlag(flag);
-	} else {
-		ClearFlag(flag);
-	}
-}
-void EmuSettings::ClearFlag(EmulationFlags flag)
-{
-	if((_flags & (int)flag) != 0) {
-		_flags &= ~(int)flag;
-	}
-}
-bool EmuSettings::CheckFlag(EmulationFlags flag)
-{
-	return (_flags & (int)flag) != 0;
-}
-void EmuSettings::SetDebuggerFlag(DebuggerFlags flag, bool enabled)
-{
-	if(enabled) {
-		if((_debuggerFlags & (uint64_t)flag) == 0) {
-			_debuggerFlags |= (uint64_t)flag;
-		}
-	} else {
-		if((_debuggerFlags & (uint64_t)flag) != 0) {
-			_debuggerFlags &= ~(uint64_t)flag;
-		}
-	}
-	DebuggerRequest req = _emu->GetDebugger(false);
-	Debugger* dbg = req.GetDebugger();
-	if(dbg) {
-		dbg->ProcessConfigChange();
-	}
-}
-bool EmuSettings::CheckDebuggerFlag(DebuggerFlags flag)
-{
-	return (_debuggerFlags & (uint64_t)flag) != 0;
-}
-bool EmuSettings::HasRandomPowerOnState(ConsoleType consoleType)
-{
-	switch(consoleType) {
-		case ConsoleType::Snes: return _snes.RamPowerOnState == RamState::Random || _snes.EnableRandomPowerOnState;
-		case ConsoleType::Gameboy: return _gameboy.RamPowerOnState == RamState::Random;
-		case ConsoleType::Nes: return _nes.RamPowerOnState == RamState::Random || _nes.RandomizeCpuPpuAlignment || _nes.RandomizeMapperPowerOnState;
-		case ConsoleType::PcEngine: return _pce.RamPowerOnState == RamState::Random || _pce.EnableRandomPowerOnState;
-		case ConsoleType::Sms: return _sms.RamPowerOnState == RamState::Random;
-		case ConsoleType::Gba: return _gba.RamPowerOnState == RamState::Random;
-	}
-	return false;
-}
-void EmuSettings::InitializeRam(RamState state, void* data, uint32_t length)
-{
-	switch(state) {
-		default:
-		case RamState::AllZeros: memset(data, 0, length); break;
-		case RamState::AllOnes: memset(data, 0xFF, length); break;
-		case RamState::Random:
-			std::uniform_int_distribution<uint64_t> dist(0, std::numeric_limits<uint64_t>::max());
-			uint32_t i = 0;
-			while(i < length) {
-				uint64_t randomData = dist(_mt);
-				for(int j = 0; j < 8 && i < length; j++) {
-					((uint8_t*)data)[i] = (uint8_t)(randomData >> (8*j));
-					i++;
-				}
-			}
-			break;
-	}
-}
-int EmuSettings::GetRandomValue(int maxValue)
-{
-	std::uniform_int_distribution<> dist(0, maxValue);
-	return dist(_mt);
-}
-bool EmuSettings::GetRandomBool()
-{
-	return GetRandomValue(1) == 1;
-}
-bool EmuSettings::IsInputEnabled()
-{
-	return !CheckFlag(EmulationFlags::InBackground) || _preferences.AllowBackgroundInput;
-}
-double EmuSettings::GetControllerDeadzoneRatio()
-{
-	switch(_input.ControllerDeadzoneSize) {
-		case 0: return 0.5;
-		case 1: return 0.75;
-		case 2: return 1;
-		case 3: return 1.25;
-		case 4: return 1.5;
-	}
-	return 1;
-}
-```
-
 ## File: Core/Debugger/Debugger.cpp
 ```cpp
 #include "pch.h"
@@ -29824,4 +29643,32 @@ template void Debugger::ProcessBreakConditions<4>(CpuType sourceCpu, StepRequest
 template void Debugger::ProcessPredictiveBreakpoint<1>(CpuType sourceCpu, BreakpointManager* bpManager, MemoryOperationInfo& operation, AddressInfo& addressInfo);
 template void Debugger::ProcessPredictiveBreakpoint<2>(CpuType sourceCpu, BreakpointManager* bpManager, MemoryOperationInfo& operation, AddressInfo& addressInfo);
 template void Debugger::ProcessPredictiveBreakpoint<4>(CpuType sourceCpu, BreakpointManager* bpManager, MemoryOperationInfo& operation, AddressInfo& addressInfo);
+```
+
+## File: .github/workflows/build.yml
+```yaml
+name: Build mesen-mcp
+on:
+  push:
+    branches: [ master ]
+concurrency:
+  group: mesen-mcp-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.x
+      - name: Restore NuGet packages
+        run: dotnet restore Mesen.sln
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+      - name: Build solution
+        run: msbuild Mesen.sln /p:Configuration=Release /p:Platform=x64
 ```

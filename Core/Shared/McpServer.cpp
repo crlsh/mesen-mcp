@@ -227,6 +227,8 @@ std::shared_ptr<McpTypedCommand> McpServer::ParseCommand(const std::string& json
 		cmd->type = McpCommandType::SetInput;
 		cmd->port = ExtractInt(json, "port", 0);
 		cmd->buttons = ExtractInt(json, "buttons", 0);
+	} else if(method == "reset") {
+		cmd->type = McpCommandType::Reset;
 	} else if(method == "get_state") {
 		cmd->type = McpCommandType::GetState;
 	} else {
@@ -273,6 +275,23 @@ void McpServer::ExecutePendingIntentions()
 		bool loaded = _emu->LoadRom((VirtualFile)path, VirtualFile(), false);
 
 		_coreState.phase = loaded ? EmuPhase::Running : EmuPhase::Error;
+	}
+
+	// Execute reset intention if pending (highest priority, BEFORE input)
+	if(_coreState.phase == EmuPhase::Running) {
+		bool shouldReset;
+		{
+			std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
+			shouldReset = _coreState.pendingReset;
+			_coreState.pendingReset = false;  // Clear after reading
+		}
+
+		if(shouldReset) {
+			IConsole* console = _emu->GetConsoleUnsafe();
+			if(console) {
+				console->Reset();
+			}
+		}
 	}
 
 	// Execute input intention if pending (BEFORE frame execution)
@@ -333,6 +352,7 @@ std::string McpServer::ExecuteCommand(McpTypedCommand& cmd)
 		case McpCommandType::ReadMemory: return ExecReadMemory(cmd);
 		case McpCommandType::WriteMemory: return ExecWriteMemory(cmd);
 		case McpCommandType::SetInput: return ExecSetInput(cmd);
+		case McpCommandType::Reset: return ExecReset(cmd);
 		case McpCommandType::GetState: return ExecGetState(cmd);
 		default: return ErrorResponse(cmd.id, "unknown command type");
 	}
@@ -471,6 +491,23 @@ std::string McpServer::ExecSetInput(McpTypedCommand& cmd)
 	}
 
 	// Return immediately - input executes in emu thread
+	return OkResponse(cmd.id, R"({"accepted":true})");
+}
+
+std::string McpServer::ExecReset(McpTypedCommand& cmd)
+{
+	// Only accept reset when running
+	if(_coreState.phase != EmuPhase::Running) {
+		return ErrorResponse(cmd.id, "emulator not running");
+	}
+
+	// Declare intention - do NOT execute
+	{
+		std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
+		_coreState.pendingReset = true;
+	}
+
+	// Return immediately - reset executes in emu thread
 	return OkResponse(cmd.id, R"({"accepted":true})");
 }
 

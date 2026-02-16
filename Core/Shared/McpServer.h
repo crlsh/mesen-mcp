@@ -26,6 +26,7 @@ enum class McpCommandType {
 	ReadMemory,
 	WriteMemory,
 	SetInput,
+	Reset,
 	GetState
 };
 
@@ -69,6 +70,7 @@ struct McpCoreState {
 	int pendingFrameCount = 0;  // step_frame intention
 	int pendingInputPort = -1;  // set_input intention (-1 = no pending input)
 	int pendingInputButtons = 0;  // set_input intention
+	bool pendingReset = false;  // reset intention
 	std::mutex intentionMutex;
 };
 
@@ -100,6 +102,7 @@ private:
 	std::string ExecReadMemory(McpTypedCommand& cmd);
 	std::string ExecWriteMemory(McpTypedCommand& cmd);
 	std::string ExecSetInput(McpTypedCommand& cmd);
+	std::string ExecReset(McpTypedCommand& cmd);
 	std::string ExecGetState(McpTypedCommand& cmd);
 	static std::string OkResponse(int id, const std::string& resultJson);
 	static std::string ErrorResponse(int id, const std::string& error);

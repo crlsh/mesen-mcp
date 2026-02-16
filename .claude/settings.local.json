@@ -4,7 +4,14 @@
       "Bash(rtk git status:*)",
       "Bash(dotnet build:*)",
       "Bash(git checkout:*)",
-      "Bash(git clean:*)"
+      "Bash(git clean:*)",
+      "Bash(ls:*)",
+      "mcp__mesen2__get_state",
+      "mcp__mesen2__launch_mesen"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "mesen2"
+  ]
 }
