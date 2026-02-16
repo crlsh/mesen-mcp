@@ -1,76 +1,81 @@
-# Mesen2 (MCP-Enabled Fork)
+Mesen2 (MCP-Enabled Fork)
 
-This repository is a personal fork of **Mesen2**, a multi-system emulator
+This repository is a personal fork of Mesen2, a multi-system emulator
 (NES, SNES, Game Boy, Game Boy Advance, PC Engine, SMS/Game Gear, WonderSwan)
 for Windows, Linux and macOS.
 
-This fork integrates a native **MCP server** directly into the emulator core
+This fork integrates a native MCP server directly into the emulator core
 to enable programmatic control without relying on external bridge scripts.
 
----
+This is not an official Mesen release.
 
-## About This Fork
+About This Fork
 
 This version replaces the previous external Python/Lua bridge with a
-native MCP server implementation inside the emulator core:
+native MCP server implementation inside the emulator core.
 
-- `Core/Shared/McpServer.cpp`
-- `Core/Shared/McpServer.h`
+Modified / Added components:
 
-The goal is to allow direct integration with external tooling and LLM-driven
-control systems in a deterministic and reproducible way.
+Core/Shared/McpServer.cpp
 
----
+Core/Shared/McpServer.h
 
-## Compiling
+The objective is to allow deterministic, direct programmatic control of the
+emulator from external tooling, including automation systems and LLM-driven workflows.
 
-See `COMPILING.md` for platform-specific instructions.
+Requirements
+Windows
 
-### Requirements
+Visual Studio 2022
 
-### Windows
-- Visual Studio 2022
-- x64 toolset
+MSVC v143 toolset
 
-### Linux
-- Clang or GCC with C++17 support
-- SDL2
-- .NET 8 SDK
+.NET 8 SDK
 
-### macOS
-- Clang with C++17 support
-- SDL2
-- .NET 8 SDK
+x64 build tools
 
----
+Linux
 
-## Build
+Clang or GCC with C++17 support
 
-### Windows
+SDL2
 
-msbuild Core/Core.vcxproj /p:Configuration=Release /p:Platform=x64
+.NET 8 SDK
 
-shell
-Copy code
+macOS
 
-### Linux / macOS
+Clang with C++17 support
 
+SDL2
+
+.NET 8 SDK
+
+Build
+Windows
+dotnet restore Mesen.sln
+msbuild Mesen.sln /p:Configuration=Release /p:Platform=x64
+
+Linux / macOS
 make
 
-yaml
-Copy code
+Continuous Integration
 
----
+This repository includes a minimal GitHub Actions workflow that validates
+that the solution builds successfully on a clean Windows environment.
 
-## Project Structure
+Only the latest push is built; previous runs are automatically canceled.
 
-- `Core/` – Emulator core
-- `InteropDLL/` – Interop layer
-- `Core/Shared/McpServer.*` – Native MCP server integration
+Project Structure
 
----
+Core/ — Emulator core
 
-## License
+InteropDLL/ — Native interop layer
+
+UI/ — .NET-based user interface
+
+Core/Shared/McpServer.* — Native MCP server integration
+
+License
 
 This project is based on Mesen2 and remains licensed under the GPL v3.
 
@@ -80,5 +85,5 @@ Copyright (C) 2014–2025 Sour
 This fork maintains GPL compliance and distributes modifications
 under the same license terms.
 
-GPL v3 full text:
+Full license text:
 http://www.gnu.org/licenses/gpl-3.0.en.html
