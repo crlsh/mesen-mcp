@@ -117,7 +117,6 @@ void McpServer::Start()
 	if(_listenThread) return;
 	_stop = false;
 	_listenThread.reset(new std::thread(&McpServer::ListenLoop, this));
-	printf("[MCP] Server listening on port %d\n", _port); fflush(stdout);
 }
 
 void McpServer::Stop()
@@ -138,12 +137,14 @@ void McpServer::Stop()
 void McpServer::ListenLoop()
 {
 	_listener.reset(new Socket());
+	_listener->SetBlocking(true);
 	_listener->Bind(_port);
-	_listener->Listen(1); // Single client
+	_listener->Listen(5);
 
 	while(!_stop) {
 		std::unique_ptr<Socket> client = _listener->Accept();
 		if(!client->ConnectionError() && !_stop) {
+			client->SetBlocking(true);
 			HandleClient(std::move(client));
 		}
 	}
@@ -151,47 +152,54 @@ void McpServer::ListenLoop()
 
 void McpServer::HandleClient(std::unique_ptr<Socket> client)
 {
-	printf("[MCP] Client connected\n"); fflush(stdout);
 	std::string buffer;
 	char chunk[4096];
 
-	while(!_stop && !client->ConnectionError()) {
-		int received = client->Recv(chunk, sizeof(chunk) - 1, 0);
-		printf("[MCP] Recv returned: %d\n", received); fflush(stdout);
-		if(received <= 0) break;
-		chunk[received] = '\0';
-		buffer += chunk;
+	int received = client->Recv(chunk, sizeof(chunk) - 1, 0);
+	if(received <= 0) return;
 
-		// Process complete lines (newline-delimited JSON)
-		size_t nlPos;
-		while((nlPos = buffer.find('\n')) != std::string::npos) {
-			std::string line = buffer.substr(0, nlPos);
-			buffer = buffer.substr(nlPos + 1);
-			if(!line.empty() && line.back() == '\r') line.pop_back();
-			if(line.empty()) continue;
+	chunk[received] = '\0';
+	buffer += chunk;
 
-			// Parse JSON into typed command (TCP thread does ALL parsing)
-			printf("[MCP] Parsing: %s\n", line.c_str()); fflush(stdout);
-			auto cmd = ParseCommand(line);
-			if(!cmd) {
-				std::string err = ErrorResponse(0, "invalid command") + "\n";
-				client->Send((char*)err.c_str(), (int)err.size(), 0);
-				continue;
-			}
-
-			// Enqueue for core thread
-			{
-				std::lock_guard<std::mutex> lock(_queueMutex);
-				_commandQueue.push(cmd);
-			}
-
-			// Block until core thread processes it (hard 30s timeout)
-			std::string response = cmd->WaitForResponse();
-			response += "\n";
-			client->Send((char*)response.c_str(), (int)response.size(), 0);
-		}
+	// Look for complete line (newline-delimited JSON)
+	size_t nlPos = buffer.find('\n');
+	if(nlPos == std::string::npos) {
+		// Incomplete message - send error and close
+		std::string err = ErrorResponse(0, "incomplete request") + "\n";
+		client->Send((char*)err.c_str(), (int)err.size(), 0);
+		return;
 	}
+
+	std::string line = buffer.substr(0, nlPos);
+	if(!line.empty() && line.back() == '\r') line.pop_back();
+	if(line.empty()) {
+		std::string err = ErrorResponse(0, "empty request") + "\n";
+		client->Send((char*)err.c_str(), (int)err.size(), 0);
+		return;
+	}
+
+	// Parse JSON into typed command (TCP thread does ALL parsing)
+	auto cmd = ParseCommand(line);
+	if(!cmd) {
+		std::string err = ErrorResponse(0, "invalid command") + "\n";
+		client->Send((char*)err.c_str(), (int)err.size(), 0);
+		return;
+	}
+
+	// Enqueue for core thread
+	{
+		std::lock_guard<std::mutex> lock(_queueMutex);
+		_commandQueue.push(cmd);
+	}
+
+	// Block until core thread processes it (hard 30s timeout)
+	std::string response = cmd->WaitForResponse();
+	response += "\n";
+	client->Send((char*)response.c_str(), (int)response.size(), 0);
+
+	// Socket closes automatically when client goes out of scope
 }
+
 
 std::shared_ptr<McpTypedCommand> McpServer::ParseCommand(const std::string& json)
 {
@@ -234,8 +242,6 @@ std::shared_ptr<McpTypedCommand> McpServer::ParseCommand(const std::string& json
 
 void McpServer::DrainCommandQueue()
 {
-	static int drainCount = 0;
-	if(++drainCount % 600 == 1) { printf("[MCP] Drain count=%d\n", drainCount); fflush(stdout); }
 	while(true) {
 		std::shared_ptr<McpTypedCommand> cmd;
 		{
@@ -247,6 +253,45 @@ void McpServer::DrainCommandQueue()
 
 		std::string response = ExecuteCommand(*cmd);
 		cmd->SetResponse(response);
+	}
+}
+
+void McpServer::ExecutePendingIntentions()
+{
+	// Execute ROM loading intention if pending
+	// Safe here: we're in the emu thread at a safe point (before frame execution)
+	if(_coreState.phase == EmuPhase::LoadingRom) {
+		std::string path;
+		{
+			std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
+			path = _coreState.pendingRomPath;
+			_coreState.pendingRomPath.clear();
+		}
+
+		// Safe to call LoadRom - we're at a safe point in the emu loop
+		// Pass stopRom=false to keep the emulator running after loading (MCP controls the clock)
+		bool loaded = _emu->LoadRom((VirtualFile)path, VirtualFile(), false);
+
+		_coreState.phase = loaded ? EmuPhase::Running : EmuPhase::Error;
+	}
+
+	// Execute frame stepping intention if pending
+	if(_coreState.phase == EmuPhase::Running) {
+		int frameCount;
+		{
+			std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
+			frameCount = _coreState.pendingFrameCount;
+			_coreState.pendingFrameCount = 0;
+		}
+
+		if(frameCount > 0) {
+			IConsole* console = _emu->GetConsoleUnsafe();
+			if(console) {
+				for(int i = 0; i < frameCount; i++) {
+					console->RunFrame();
+				}
+			}
+		}
 	}
 }
 
@@ -302,67 +347,44 @@ std::string McpServer::ExecLoadRom(McpTypedCommand& cmd)
 		return ErrorResponse(cmd.id, "missing path");
 	}
 
-	// Stop current system completely
-	if(_emu->IsRunning()) {
-		_emu->Stop(false, false, true);
+	// Declare intention only - do NOT execute
+	{
+		std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
+		_coreState.pendingRomPath = cmd.path;
+		_coreState.phase = EmuPhase::LoadingRom;
 	}
 
-	// Load ROM — this creates console, detects type, starts emu thread
-	bool loaded = _emu->LoadRom((VirtualFile)cmd.path, VirtualFile());
-	if(!loaded) {
-		_coreState.romLoaded = false;
-		_coreState.consoleType = -1;
-		_coreState.externalControl = false;
-		return ErrorResponse(cmd.id, "failed to load ROM");
-	}
-
-	ConsoleType ct = _emu->GetConsoleType();
-	_coreState.consoleType = (int)ct;
-	_coreState.romLoaded = true;
-	_coreState.externalControl = true;
-
-	std::ostringstream result;
-	result << "{\"console_type\":" << (int)ct
-	       << ",\"path\":\"";
-	// Escape backslashes in path
-	for(char c : cmd.path) {
-		if(c == '\\') result << "\\\\";
-		else if(c == '"') result << "\\\"";
-		else result << c;
-	}
-	result << "\",\"mode\":\"external_controlled\"}";
-
-	MessageManager::Log("[MCP] ROM loaded: " + cmd.path + " (console=" + std::to_string((int)ct) + ")");
-	return OkResponse(cmd.id, result.str());
+	// Return immediately - execution happens in emu thread
+	return OkResponse(cmd.id, R"({"accepted":true})");
 }
 
 std::string McpServer::ExecStepFrame(McpTypedCommand& cmd)
 {
-	if(!_coreState.romLoaded) return ErrorResponse(cmd.id, "no ROM loaded");
+	// Only accept step_frame when running
+	if(_coreState.phase != EmuPhase::Running) {
+		return ErrorResponse(cmd.id, "emulator not running");
+	}
 
 	int count = cmd.count;
 	if(count < 1) count = 1;
 	if(count > 3600) count = 3600;
 
-	IConsole* console = _emu->GetConsoleUnsafe();
-	if(!console) return ErrorResponse(cmd.id, "no active console");
-
-	for(int i = 0; i < count; i++) {
-		console->RunFrame();
+	// Declare intention - do NOT execute frames
+	{
+		std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
+		_coreState.pendingFrameCount = count;
 	}
 
-	uint32_t frameCount = _emu->GetFrameCount();
-	std::ostringstream result;
-	result << "{\"framesExecuted\":" << count << ",\"frameCount\":" << frameCount << "}";
-	return OkResponse(cmd.id, result.str());
+	// Return immediately - frames execute in emu thread
+	return OkResponse(cmd.id, R"({"accepted":true})");
 }
 
 std::string McpServer::ExecReadMemory(McpTypedCommand& cmd)
 {
-	if(!_coreState.romLoaded) return ErrorResponse(cmd.id, "no ROM loaded");
+	if(!_emu->IsRunning()) return ErrorResponse(cmd.id, "no ROM loaded");
 	if(cmd.address < 0) return ErrorResponse(cmd.id, "invalid address");
 
-	MemoryType memType = GetCpuMemoryType((ConsoleType)_coreState.consoleType);
+	MemoryType memType = GetCpuMemoryType(_emu->GetConsoleType());
 
 	DebuggerRequest dbgRequest = _emu->GetDebugger(true);
 	Debugger* dbg = dbgRequest.GetDebugger();
@@ -393,11 +415,11 @@ std::string McpServer::ExecReadMemory(McpTypedCommand& cmd)
 
 std::string McpServer::ExecWriteMemory(McpTypedCommand& cmd)
 {
-	if(!_coreState.romLoaded) return ErrorResponse(cmd.id, "no ROM loaded");
+	if(!_emu->IsRunning()) return ErrorResponse(cmd.id, "no ROM loaded");
 	if(cmd.address < 0) return ErrorResponse(cmd.id, "invalid address");
 	if(cmd.value < 0 || cmd.value > 255) return ErrorResponse(cmd.id, "value must be 0-255");
 
-	MemoryType memType = GetCpuMemoryType((ConsoleType)_coreState.consoleType);
+	MemoryType memType = GetCpuMemoryType(_emu->GetConsoleType());
 
 	DebuggerRequest dbgRequest = _emu->GetDebugger(true);
 	Debugger* dbg = dbgRequest.GetDebugger();
@@ -410,7 +432,7 @@ std::string McpServer::ExecWriteMemory(McpTypedCommand& cmd)
 
 std::string McpServer::ExecSetInput(McpTypedCommand& cmd)
 {
-	if(!_coreState.romLoaded) return ErrorResponse(cmd.id, "no ROM loaded");
+	if(!_emu->IsRunning()) return ErrorResponse(cmd.id, "no ROM loaded");
 
 	IConsole* console = _emu->GetConsoleUnsafe();
 	if(!console) return ErrorResponse(cmd.id, "no active console");
@@ -432,17 +454,26 @@ std::string McpServer::ExecSetInput(McpTypedCommand& cmd)
 std::string McpServer::ExecGetState(McpTypedCommand& cmd)
 {
 	std::ostringstream result;
-	result << "{\"rom_loaded\":" << (_coreState.romLoaded ? "true" : "false")
-	       << ",\"console_type\":" << _coreState.consoleType
-	       << ",\"mode\":\"" << (_coreState.externalControl ? "external_controlled" : "free_running") << "\"";
+	result << "{\"phase\":\"";
 
-	if(_coreState.romLoaded) {
+	switch(_coreState.phase.load()) {
+		case EmuPhase::Idle:       result << "idle"; break;
+		case EmuPhase::LoadingRom: result << "loading"; break;
+		case EmuPhase::Running:    result << "running"; break;
+		case EmuPhase::Error:      result << "error"; break;
+	}
+
+	result << "\"";
+
+	// Add frame count and PC when running
+	if(_coreState.phase == EmuPhase::Running && _emu->IsRunning()) {
 		result << ",\"frame_count\":" << _emu->GetFrameCount();
 
 		DebuggerRequest dbgRequest = _emu->GetDebugger(true);
 		Debugger* dbg = dbgRequest.GetDebugger();
 		if(dbg) {
-			CpuType cpuType = GetMainCpuType((ConsoleType)_coreState.consoleType);
+			ConsoleType ct = _emu->GetConsoleType();
+			CpuType cpuType = GetMainCpuType(ct);
 			uint32_t pc = dbg->GetProgramCounter(cpuType, false);
 			result << ",\"pc\":" << pc;
 		}

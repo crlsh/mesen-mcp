@@ -148,6 +148,8 @@ void Emulator::Run()
 		// Drain MCP commands every iteration (like MesenX)
 		if(_mcpServer) {
 			_mcpServer->DrainCommandQueue();
+			// Execute pending MCP intentions after processing commands
+			_mcpServer->ExecutePendingIntentions();
 		}
 
 		if(_mcpServer && _mcpServer->IsExternalControlled()) {

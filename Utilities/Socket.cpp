@@ -99,6 +99,12 @@ void Socket::SetSocketOptions()
 	setsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, (char*)&value, sizeof(value));	
 }
 
+void Socket::SetBlocking(bool blocking)
+{
+	u_long iMode = blocking ? 0 : 1;
+	ioctlsocket(_socket, FIONBIO, &iMode);
+}
+
 void Socket::SetConnectionErrorFlag()
 {
 	_connectionError = true;

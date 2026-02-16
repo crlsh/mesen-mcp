@@ -20,6 +20,7 @@ public:
 
 	void SetSocketOptions();
 	void SetConnectionErrorFlag();
+	void SetBlocking(bool blocking);
 
 	void Close();
 	bool ConnectionError();

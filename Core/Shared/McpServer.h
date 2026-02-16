@@ -11,6 +11,14 @@
 class Emulator;
 class Socket;
 
+// Emulator phase state machine
+enum class EmuPhase {
+	Idle,
+	LoadingRom,
+	Running,
+	Error
+};
+
 // Typed command — core thread never sees JSON
 enum class McpCommandType {
 	LoadRom,
@@ -54,11 +62,12 @@ struct McpTypedCommand {
 	}
 };
 
-// Core state contract — every MCP tool validates against this
+// Core state — phase machine with pending intentions
 struct McpCoreState {
-	int consoleType = -1;
-	bool romLoaded = false;
-	bool externalControl = false;
+	std::atomic<EmuPhase> phase{EmuPhase::Idle};
+	std::string pendingRomPath;
+	int pendingFrameCount = 0;  // step_frame intention
+	std::mutex intentionMutex;
 };
 
 class McpServer {
@@ -102,7 +111,8 @@ public:
 
 	// Called from emulation thread to drain and execute queued commands
 	void DrainCommandQueue();
+	void ExecutePendingIntentions();
 
-	bool IsExternalControlled() const { return _coreState.externalControl; }
+	bool IsExternalControlled() const { return _coreState.phase == EmuPhase::Running; }
 	McpCoreState& GetCoreState() { return _coreState; }
 };
