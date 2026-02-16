@@ -1,0 +1,22 @@
+# Salidas de Repomix (importante ignorarlas)
+repomix-output.xml
+repomix-output.md
+
+# Carpetas de distribución y build
+dist
+node_modules
+build
+bin
+obj
+
+# Exclusiones específicas de Mesen2
+Core/Shared/Video/
+Core/Shared/Rendering/
+DrawStringCommand.cpp
+UI/Dependencies/
+
+# Archivos específicos ignorados
+Utilities/miniz.cpp
+Utilities/Audio/stb_vorbis.cpp
+**/*.bin
+**/*.icns

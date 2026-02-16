@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rtk git status:*)",
+      "Bash(dotnet build:*)",
+      "Bash(git checkout:*)",
+      "Bash(git clean:*)"
+    ]
+  }
+}

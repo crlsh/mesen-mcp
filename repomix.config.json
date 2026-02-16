@@ -1,0 +1,73 @@
+{
+  "$schema": "https://repomix.com/schemas/latest/schema.json",
+  "input": {
+    "maxFileSize": 52428800
+  },
+  "output": {
+    "filePath": "repomix-output.md",
+    "style": "markdown",
+    "parsableStyle": true,
+    "fileSummary": true,
+    "directoryStructure": true,
+    "files": true,
+    "removeComments": true,
+    "removeEmptyLines": true,
+    "compress": false,
+    "topFilesLength": 10,
+    "showLineNumbers": false,
+    "truncateBase64": false,
+    "copyToClipboard": false,
+    "includeFullDirectoryStructure": false,
+    "tokenCountTree": false,
+    "headerText": "CONTEXTO DE INFRAESTRUCTURA MCP:\nEste repositorio (Mesen2) actúa como el motor de emulación. El control programático, la lectura de memoria y la interacción con LLMs se gestionan mediante el repositorio paralelo 'mesen-mcp-infra'.\nLos puntos de entrada clave para el control externo en este repositorio son InteropDLL y Core/Debugger.",
+    "git": {
+      "sortByChanges": true,
+      "sortByChangesMaxCommits": 100,
+      "includeDiffs": false,
+      "includeLogs": false,
+      "includeLogsCount": 50
+    }
+  },
+  "ignore": {
+    "useGitignore": true,
+    "useDotIgnore": true,
+    "useDefaultPatterns": true,
+    "customPatterns": [
+      "**/repomix-output.*",
+      "**/bin/**",
+      "**/obj/**",
+      "**/*.pdb",
+      "**/*.lib",
+      "**/*.dll",
+      "**/*.zip",
+      "**/*.exe",
+      "**/*.vcxproj*",
+      "**/*.filters",
+      "**/*.user",
+      "**/*.sln",
+      "**/Localization/**",
+      "UI/**",
+      "SevenZip/**",
+      "Lua/**",
+      "Utilities/**",
+      "Linux/**",
+      "MacOS/**",
+      "Windows/**",
+      "Sdl/**",
+      "PGOHelper/**",
+      "Core/NES/**",
+      "Core/SNES/**",
+      "Core/Gameboy/**",
+      "Core/GBA/**",
+      "Core/PCE/**",
+      "Core/SMS/**",
+      "Core/WS/**"
+    ]
+  },
+  "security": {
+    "enableSecurityCheck": true
+  },
+  "tokenCount": {
+    "encoding": "o200k_base"
+  }
+}
