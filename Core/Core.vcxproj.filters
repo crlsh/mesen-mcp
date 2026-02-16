@@ -436,7 +436,13 @@
     <ClCompile Include="Shared\Emulator.cpp">
       <Filter>Shared</Filter>
     </ClCompile>
+    <ClCompile Include="Shared\McpServer.cpp">
+      <Filter>Shared</Filter>
+    </ClCompile>
     <ClInclude Include="Shared\Emulator.h">
+      <Filter>Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="Shared\McpServer.h">
       <Filter>Shared</Filter>
     </ClInclude>
     <ClCompile Include="Shared\EmulatorLock.cpp">

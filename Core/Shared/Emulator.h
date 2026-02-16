@@ -34,6 +34,7 @@ class SystemActionManager;
 class AudioPlayerHud;
 class GameServer;
 class GameClient;
+class McpServer;
 
 class IInputRecorder;
 class IInputProvider;
@@ -85,6 +86,8 @@ private:
 	const shared_ptr<GameServer> _gameServer;
 	const shared_ptr<GameClient> _gameClient;
 	const shared_ptr<RewindManager> _rewindManager;
+
+	unique_ptr<McpServer> _mcpServer;
 
 	thread_local static thread::id _currentThreadId;
 	thread::id _emulationThreadId;
@@ -203,6 +206,7 @@ public:
 	HistoryViewer* GetHistoryViewer() { return _historyViewer.get(); }
 	GameServer* GetGameServer() { return _gameServer.get(); }
 	GameClient* GetGameClient() { return _gameClient.get(); }
+	McpServer* GetMcpServer() { return _mcpServer.get(); }
 	shared_ptr<SystemActionManager> GetSystemActionManager() { return _systemActionManager; }
 
 	BaseVideoFilter* GetVideoFilter(bool getDefaultFilter = false);

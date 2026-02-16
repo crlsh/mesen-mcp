@@ -25,6 +25,7 @@
 #include "Shared/HistoryViewer.h"
 #include "Netplay/GameServer.h"
 #include "Netplay/GameClient.h"
+#include "Shared/McpServer.h"
 #include "Shared/Interfaces/IConsole.h"
 #include "Shared/Interfaces/IBarcodeReader.h"
 #include "Shared/Interfaces/ITapeRecorder.h"
@@ -93,6 +94,12 @@ void Emulator::Initialize(bool enableShortcuts)
 
 	_videoDecoder->StartThread();
 	_videoRenderer->StartThread();
+
+	// Start MCP server (always-on, localhost:12345)
+	if(!_mcpServer) {
+		_mcpServer.reset(new McpServer(this, 12345));
+		_mcpServer->Start();
+	}
 }
 
 void Emulator::Release()
@@ -101,6 +108,11 @@ void Emulator::Release()
 
 	_gameClient->Disconnect();
 	_gameServer->StopServer();
+
+	if(_mcpServer) {
+		_mcpServer->Stop();
+		_mcpServer.reset();
+	}
 
 	_videoDecoder->StopThread();
 	_videoRenderer->StopThread();
@@ -133,17 +145,28 @@ void Emulator::Run()
 	_lastFrameTimer.Reset();
 
 	while(!_stopFlag) {
-		bool useRunAhead = _settings->GetEmulationConfig().RunAheadFrames > 0 && !_debugger && !_audioPlayerHud && !_rewindManager->IsRewinding() && _settings->GetEmulationSpeed() > 0 && _settings->GetEmulationSpeed() <= 100;
-		if(useRunAhead) {
-			RunFrameWithRunAhead();
-		} else {
-			_console->RunFrame();
-			_rewindManager->ProcessEndOfFrame();
-			_historyViewer->ProcessEndOfFrame();
-			ProcessSystemActions();
+		// Drain MCP commands every iteration (like MesenX)
+		if(_mcpServer) {
+			_mcpServer->DrainCommandQueue();
 		}
 
-		ProcessAutoSaveState();
+		if(_mcpServer && _mcpServer->IsExternalControlled()) {
+			// MCP mode: clock authority belongs to MCP, not UI.
+			std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(1));
+		} else {
+			// Normal mode: existing behavior untouched
+			bool useRunAhead = _settings->GetEmulationConfig().RunAheadFrames > 0 && !_debugger && !_audioPlayerHud && !_rewindManager->IsRewinding() && _settings->GetEmulationSpeed() > 0 && _settings->GetEmulationSpeed() <= 100;
+			if(useRunAhead) {
+				RunFrameWithRunAhead();
+			} else {
+				_console->RunFrame();
+				_rewindManager->ProcessEndOfFrame();
+				_historyViewer->ProcessEndOfFrame();
+				ProcessSystemActions();
+			}
+
+			ProcessAutoSaveState();
+		}
 
 		WaitForLock();
 
