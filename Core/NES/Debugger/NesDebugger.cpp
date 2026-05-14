@@ -36,6 +36,7 @@
 #include "Shared/BaseControlManager.h"
 #include "Shared/Emulator.h"
 #include "Shared/MemoryOperationType.h"
+#include "Shared/McpWriteLog.h"
 
 NesDebugger::NesDebugger(Debugger* debugger) : IDebugger(debugger->GetEmulator())
 {
@@ -244,6 +245,25 @@ void NesDebugger::ProcessWrite(uint32_t addr, uint8_t value, MemoryOperationType
 	}
 
 	_memoryAccessCounter->ProcessMemoryWrite(addressInfo, _cpu->GetCycleCount());
+
+	{
+		McpWriteLog& wl = McpWriteLog::Instance();
+		if(wl.IsEnabled() && wl.InRange((uint16_t)addr)) {
+			uint16_t pc = (uint16_t)_debugger->GetProgramCounter(CpuType::Nes, true);
+			AddressInfo pcInfo = _mapper->GetAbsoluteAddress(pc);
+			int32_t prgPc = (pcInfo.Type == MemoryType::NesPrgRom) ? pcInfo.Address : -1;
+			int32_t prgAddr = (addressInfo.Type == MemoryType::NesPrgRom) ? addressInfo.Address : -1;
+			wl.Record(
+				_cpu->GetCycleCount(),
+				pc,
+				(uint16_t)addr,
+				value,
+				prgPc,
+				prgAddr
+			);
+		}
+	}
+
 	_step->ProcessCpuCycle();
 	_debugger->ProcessBreakConditions(CpuType::Nes, *_step.get(), _breakpointManager.get(), operation, addressInfo);
 }

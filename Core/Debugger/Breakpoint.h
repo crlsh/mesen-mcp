@@ -11,6 +11,7 @@ struct MemoryOperationInfo;
 
 class Breakpoint
 {
+	friend class McpServer;
 public:
 	template<uint8_t accessWidth = 1> bool Matches(MemoryOperationInfo &opInfo, AddressInfo &info);
 	bool HasBreakpointType(BreakpointType type);
