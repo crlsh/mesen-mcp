@@ -45,6 +45,13 @@ namespace {
 		out.append(buf, n);
 	}
 
+	void AppendUInt64(string& out, uint64_t value)
+	{
+		char buf[32];
+		int n = snprintf(buf, sizeof(buf), "%llu", (unsigned long long)value);
+		out.append(buf, n);
+	}
+
 	void AppendInt(string& out, int32_t value)
 	{
 		char buf[16];
@@ -63,7 +70,7 @@ NesControlFlowTracer::~NesControlFlowTracer()
 	Stop();
 }
 
-void NesControlFlowTracer::Start(const string& filename)
+void NesControlFlowTracer::Start(const string& filename, bool deduplicate, const string& summaryPath)
 {
 	if(_enabled) {
 		return;
@@ -73,6 +80,12 @@ void NesControlFlowTracer::Start(const string& filename)
 	_outputFile.open(filename, ios::out | ios::binary);
 	_enabled = _outputFile.is_open();
 	_mapperStateId = 0;
+	_deduplicate = deduplicate;
+	_summaryPath = summaryPath;
+	_seen.clear();
+	_eventsSeen = 0;
+	_uniqueEvents = 0;
+	_newSinceLastStats = 0;
 }
 
 void NesControlFlowTracer::Stop()
@@ -85,6 +98,9 @@ void NesControlFlowTracer::Stop()
 				_outputBuffer.clear();
 			}
 			_outputFile.close();
+		}
+		if(_deduplicate) {
+			WriteSummary();
 		}
 	}
 }
@@ -102,6 +118,134 @@ void NesControlFlowTracer::EmitLine(string& line)
 	line += '\n';
 	_outputBuffer += line;
 	FlushIfNeeded();
+}
+
+uint32_t NesControlFlowTracer::PrgOffsetForCpu(int32_t cpuAddr)
+{
+	if(cpuAddr < 0) return 0xFFFFFFFFu;
+	BaseMapper* mapper = _console->GetMapper();
+	if(!mapper) return 0xFFFFFFFFu;
+	auto loc = mapper->ResolveCpuAddressToPrgOffset((uint16_t)cpuAddr);
+	if(!loc.has_value()) return 0xFFFFFFFFu;
+	return (uint32_t)loc->PrgOffset;
+}
+
+uint32_t NesControlFlowTracer::HashPrgMap(const vector<PrgWindow>& windows)
+{
+	//Cheap stable hash of the resulting bank layout. Two identical writes (addr+value)
+	//under the same mapperStateId produce the same hash; that's enough for dedup.
+	uint32_t h = 2166136261u;
+	for(const PrgWindow& w : windows) {
+		uint32_t v = (uint32_t)(w.Bank & 0xFFFF) | ((uint32_t)(w.PrgOffsetStart & 0xFFFFFF) << 16);
+		h = (h ^ v) * 16777619u;
+	}
+	return h;
+}
+
+bool NesControlFlowTracer::MaybeRecord(uint8_t type, uint32_t a, uint32_t b)
+{
+	BaseNesPpu* ppu = _console->GetPpu();
+	uint32_t frame = ppu ? ppu->GetFrameCount() : 0;
+	DedupKey k{ type, a, b, _mapperStateId };
+	auto it = _seen.find(k);
+	if(it == _seen.end()) {
+		DedupEntry e;
+		e.count = 1;
+		e.firstFrame = frame;
+		e.lastFrame = frame;
+		_seen.emplace(k, std::move(e));
+		_uniqueEvents++;
+		_newSinceLastStats++;
+		return true;
+	}
+	it->second.count++;
+	it->second.lastFrame = frame;
+	return false;
+}
+
+void NesControlFlowTracer::EmitOrDedupLine(string& line, uint8_t type, uint32_t a, uint32_t b)
+{
+	_eventsSeen++;
+	if(_deduplicate) {
+		bool isNew = MaybeRecord(type, a, b);
+		if(isNew) {
+			//Stash a copy of the JSON line in the dedup entry for the summary.
+			DedupKey k{ type, a, b, _mapperStateId };
+			_seen[k].firstLineJson = line;
+			EmitLine(line);
+		}
+		//Duplicates: nothing written to JSONL, count was already bumped above.
+	} else {
+		EmitLine(line);
+	}
+}
+
+void NesControlFlowTracer::WriteSummary()
+{
+	if(_summaryPath.empty()) return;
+	ofstream sf(_summaryPath, ios::out | ios::binary);
+	if(!sf.is_open()) return;
+
+	sf << "{\"eventsSeen\":";
+	{ char b[32]; int n = snprintf(b, sizeof(b), "%llu", (unsigned long long)_eventsSeen); sf.write(b, n); }
+	sf << ",\"uniqueEvents\":";
+	{ char b[32]; int n = snprintf(b, sizeof(b), "%llu", (unsigned long long)_uniqueEvents); sf.write(b, n); }
+	sf << ",\"events\":[";
+
+	bool first = true;
+	for(const auto& kv : _seen) {
+		const DedupKey& k = kv.first;
+		const DedupEntry& e = kv.second;
+		if(!first) sf << ',';
+		first = false;
+		sf << "{\"type\":";
+		switch(k.type) {
+			case 0: sf << "\"RESET\""; break;
+			case 1: sf << "\"NMI_ENTRY\""; break;
+			case 2: sf << "\"IRQ_ENTRY\""; break;
+			case 3: sf << "\"JSR\""; break;
+			case 4: sf << "\"JMP_ABS\""; break;
+			case 5: sf << "\"JMP_INDIRECT\""; break;
+			case 6: sf << "\"RTS\""; break;
+			case 7: sf << "\"RTI\""; break;
+			case 8: sf << "\"BRK\""; break;
+			case 9: sf << "\"MAPPER_WRITE\""; break;
+			default: sf << "\"UNKNOWN\""; break;
+		}
+		if(k.type == 9) {
+			//MAPPER_WRITE: a == addr<<8|value, b == prgMapAfter hash
+			sf << ",\"addr\":\"0x";
+			char hbuf[8]; snprintf(hbuf, sizeof(hbuf), "%04X", (uint16_t)((k.a >> 8) & 0xFFFF)); sf << hbuf;
+			sf << "\",\"value\":\"0x";
+			snprintf(hbuf, sizeof(hbuf), "%02X", (uint8_t)(k.a & 0xFF)); sf << hbuf;
+			sf << "\",\"prgMapAfterHash\":\"0x";
+			char hb[16]; snprintf(hb, sizeof(hb), "%08X", k.b); sf << hb;
+			sf << "\"";
+		} else {
+			sf << ",\"srcPrgOffset\":";
+			if(k.a == 0xFFFFFFFFu) sf << "null";
+			else { char hb[16]; snprintf(hb, sizeof(hb), "\"0x%06X\"", k.a & 0xFFFFFF); sf << hb; }
+			sf << ",\"dstPrgOffset\":";
+			if(k.b == 0xFFFFFFFFu) sf << "null";
+			else { char hb[16]; snprintf(hb, sizeof(hb), "\"0x%06X\"", k.b & 0xFFFFFF); sf << hb; }
+		}
+		sf << ",\"mapperStateId\":" << k.mapperStateId;
+		sf << ",\"count\":";
+		{ char b[32]; int n = snprintf(b, sizeof(b), "%llu", (unsigned long long)e.count); sf.write(b, n); }
+		sf << ",\"firstFrame\":" << e.firstFrame;
+		sf << ",\"lastFrame\":" << e.lastFrame;
+		sf << '}';
+	}
+
+	sf << "]}";
+	sf.close();
+}
+
+NesControlFlowTracer::Stats NesControlFlowTracer::ConsumeStats()
+{
+	Stats s{ _eventsSeen, _uniqueEvents, _newSinceLastStats };
+	_newSinceLastStats = 0;
+	return s;
 }
 
 void NesControlFlowTracer::AppendFrameLocation(string& out)
@@ -199,7 +343,7 @@ void NesControlFlowTracer::LogReset(uint16_t dstPc)
 	line += ",\"mapperStateId\":";
 	AppendUInt(line, _mapperStateId);
 	line += '}';
-	EmitLine(line);
+	EmitOrDedupLine(line, 0, 0xFFFFFFFFu, PrgOffsetForCpu(dstPc));
 }
 
 void NesControlFlowTracer::LogNmiEntry(uint16_t srcPc, uint16_t dstPc)
@@ -214,7 +358,7 @@ void NesControlFlowTracer::LogNmiEntry(uint16_t srcPc, uint16_t dstPc)
 	line += ",\"mapperStateId\":";
 	AppendUInt(line, _mapperStateId);
 	line += '}';
-	EmitLine(line);
+	EmitOrDedupLine(line, 1, PrgOffsetForCpu(srcPc), PrgOffsetForCpu(dstPc));
 }
 
 void NesControlFlowTracer::LogIrqEntry(uint16_t srcPc, uint16_t dstPc)
@@ -229,7 +373,7 @@ void NesControlFlowTracer::LogIrqEntry(uint16_t srcPc, uint16_t dstPc)
 	line += ",\"mapperStateId\":";
 	AppendUInt(line, _mapperStateId);
 	line += '}';
-	EmitLine(line);
+	EmitOrDedupLine(line, 2, PrgOffsetForCpu(srcPc), PrgOffsetForCpu(dstPc));
 }
 
 void NesControlFlowTracer::LogJsr(uint16_t srcPc, uint16_t dstPc)
@@ -244,7 +388,7 @@ void NesControlFlowTracer::LogJsr(uint16_t srcPc, uint16_t dstPc)
 	line += ",\"mapperStateId\":";
 	AppendUInt(line, _mapperStateId);
 	line += '}';
-	EmitLine(line);
+	EmitOrDedupLine(line, 3, PrgOffsetForCpu(srcPc), PrgOffsetForCpu(dstPc));
 }
 
 void NesControlFlowTracer::LogJmpAbs(uint16_t srcPc, uint16_t dstPc)
@@ -259,7 +403,7 @@ void NesControlFlowTracer::LogJmpAbs(uint16_t srcPc, uint16_t dstPc)
 	line += ",\"mapperStateId\":";
 	AppendUInt(line, _mapperStateId);
 	line += '}';
-	EmitLine(line);
+	EmitOrDedupLine(line, 4, PrgOffsetForCpu(srcPc), PrgOffsetForCpu(dstPc));
 }
 
 void NesControlFlowTracer::LogJmpIndirect(uint16_t srcPc, uint16_t ptr, uint16_t ptrValue)
@@ -278,7 +422,7 @@ void NesControlFlowTracer::LogJmpIndirect(uint16_t srcPc, uint16_t ptr, uint16_t
 	line += ",\"ptrValue\":";
 	AppendHex16(line, ptrValue);
 	line += '}';
-	EmitLine(line);
+	EmitOrDedupLine(line, 5, PrgOffsetForCpu(srcPc), PrgOffsetForCpu(ptrValue));
 }
 
 void NesControlFlowTracer::LogRts(uint16_t srcPc, uint16_t pulledAddress, uint16_t dstPc, uint8_t stackBefore, uint8_t stackAfter)
@@ -299,7 +443,7 @@ void NesControlFlowTracer::LogRts(uint16_t srcPc, uint16_t pulledAddress, uint16
 	line += ",\"pulledAddress\":";
 	AppendHex16(line, pulledAddress);
 	line += '}';
-	EmitLine(line);
+	EmitOrDedupLine(line, 6, PrgOffsetForCpu(srcPc), PrgOffsetForCpu(dstPc));
 }
 
 void NesControlFlowTracer::LogRti(uint16_t srcPc, uint16_t pulledAddress, uint8_t stackBefore, uint8_t stackAfter)
@@ -320,7 +464,7 @@ void NesControlFlowTracer::LogRti(uint16_t srcPc, uint16_t pulledAddress, uint8_
 	line += ",\"pulledAddress\":";
 	AppendHex16(line, pulledAddress);
 	line += '}';
-	EmitLine(line);
+	EmitOrDedupLine(line, 7, PrgOffsetForCpu(srcPc), PrgOffsetForCpu(pulledAddress));
 }
 
 void NesControlFlowTracer::LogBrk(uint16_t srcPc, uint16_t dstPc, bool nmi)
@@ -336,7 +480,7 @@ void NesControlFlowTracer::LogBrk(uint16_t srcPc, uint16_t dstPc, bool nmi)
 	line += ",\"mapperStateId\":";
 	AppendUInt(line, _mapperStateId);
 	line += '}';
-	EmitLine(line);
+	EmitOrDedupLine(line, 8, PrgOffsetForCpu(srcPc), PrgOffsetForCpu(dstPc));
 }
 
 void NesControlFlowTracer::LogMapperWrite(uint16_t addr, uint8_t value, const vector<PrgWindow>& before, const vector<PrgWindow>& after)
@@ -356,5 +500,7 @@ void NesControlFlowTracer::LogMapperWrite(uint16_t addr, uint8_t value, const ve
 	line += ',';
 	AppendPrgMap(line, "prgMapAfter", after);
 	line += '}';
-	EmitLine(line);
+	uint32_t a = ((uint32_t)addr << 8) | value;
+	uint32_t b = HashPrgMap(after);
+	EmitOrDedupLine(line, 9, a, b);
 }

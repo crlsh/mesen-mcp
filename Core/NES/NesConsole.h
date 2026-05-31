@@ -77,7 +77,7 @@ public:
 	BaseMapper* GetMapper() { return _mapper.get(); }
 	NesSoundMixer* GetSoundMixer() { return _mixer.get(); }
 	__forceinline NesControlFlowTracer* GetControlFlowTracer() { return _cfTracer.get(); }
-	void StartControlFlowTrace(const string& filename);
+	void StartControlFlowTrace(const string& filename, bool deduplicate = false, const string& summaryPath = "");
 	void StopControlFlowTrace();
 	Emulator* GetEmulator();
 	NesConfig& GetNesConfig();

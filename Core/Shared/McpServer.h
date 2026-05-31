@@ -44,7 +44,8 @@ enum class McpCommandType {
 	GetWriteLog,
 	SetSpeed,
 	StartControlFlowTrace,
-	StopControlFlowTrace
+	StopControlFlowTrace,
+	GetControlFlowTraceStats
 };
 
 struct McpTypedCommand {
@@ -66,6 +67,8 @@ struct McpTypedCommand {
 	int endAddr = 0xFFFF;        // set_write_log: range end
 	bool enabled = false;        // set_write_log: toggle / get_write_log: drain flag
 	int speed = 100;             // set_speed: 0=unlimited, 100=normal, up to 5000
+	bool deduplicate = false;    // start_control_flow_trace: online dedup
+	std::string summaryPath;     // start_control_flow_trace: where to write the dedup summary on Stop()
 
 	// Response channel: core sets, TCP thread waits (hard 30s timeout)
 	std::string response;
@@ -164,6 +167,7 @@ private:
 	std::string ExecSetSpeed(McpTypedCommand& cmd);
 	std::string ExecStartControlFlowTrace(McpTypedCommand& cmd);
 	std::string ExecStopControlFlowTrace(McpTypedCommand& cmd);
+	std::string ExecGetControlFlowTraceStats(McpTypedCommand& cmd);
 
 	static std::string OkResponse(int id, const std::string& resultJson);
 	static std::string ErrorResponse(int id, const std::string& error);

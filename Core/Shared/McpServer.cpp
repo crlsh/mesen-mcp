@@ -21,6 +21,7 @@
 #include "Shared/McpWriteLog.h"
 #include "NES/NesTypes.h"
 #include "NES/NesConsole.h"
+#include "NES/Debugger/NesControlFlowTracer.h"
 #include "NES/NesMemoryManager.h"
 #include "Utilities/Socket.h"
 #include "Utilities/VirtualFile.h"
@@ -327,8 +328,12 @@ std::shared_ptr<McpTypedCommand> McpServer::ParseCommand(const std::string& json
 	} else if(method == "start_control_flow_trace") {
 		cmd->type = McpCommandType::StartControlFlowTrace;
 		cmd->path = ExtractString(json, "path");
+		cmd->deduplicate = ExtractInt(json, "deduplicate", 0) != 0;
+		cmd->summaryPath = ExtractString(json, "summary_path");
 	} else if(method == "stop_control_flow_trace") {
 		cmd->type = McpCommandType::StopControlFlowTrace;
+	} else if(method == "get_control_flow_trace_stats") {
+		cmd->type = McpCommandType::GetControlFlowTraceStats;
 	} else {
 		return nullptr;
 	}
@@ -364,6 +369,8 @@ bool McpServer::CanExecuteDirect(McpCommandType type)
 	//the new pointer one instruction later, which is harmless.
 	if(type == McpCommandType::StartControlFlowTrace) return true;
 	if(type == McpCommandType::StopControlFlowTrace) return true;
+	//GetControlFlowTraceStats reads three uint64 counters — no emu-thread mutation.
+	if(type == McpCommandType::GetControlFlowTraceStats) return true;
 
 	// All other commands need the debugger to be stopped (core thread sleeping
 	// in SleepUntilResume), otherwise they would race with the running emu.
@@ -413,6 +420,7 @@ std::string McpServer::ExecuteCommandDirect(McpTypedCommand& cmd)
 		case McpCommandType::SetSpeed: return ExecSetSpeed(cmd);
 		case McpCommandType::StartControlFlowTrace: return ExecStartControlFlowTrace(cmd);
 		case McpCommandType::StopControlFlowTrace: return ExecStopControlFlowTrace(cmd);
+		case McpCommandType::GetControlFlowTraceStats: return ExecGetControlFlowTraceStats(cmd);
 		default: return ErrorResponse(cmd.id, "command not supported in direct mode");
 	}
 }
@@ -610,6 +618,7 @@ std::string McpServer::ExecuteCommand(McpTypedCommand& cmd)
 		case McpCommandType::SetSpeed: return ExecSetSpeed(cmd);
 		case McpCommandType::StartControlFlowTrace: return ExecStartControlFlowTrace(cmd);
 		case McpCommandType::StopControlFlowTrace: return ExecStopControlFlowTrace(cmd);
+		case McpCommandType::GetControlFlowTraceStats: return ExecGetControlFlowTraceStats(cmd);
 		default: return ErrorResponse(cmd.id, "unknown command type");
 	}
 }
@@ -861,8 +870,15 @@ std::string McpServer::ExecStartControlFlowTrace(McpTypedCommand& cmd)
 	if(!nes) {
 		return ErrorResponse(cmd.id, "no NES ROM loaded");
 	}
-	nes->StartControlFlowTrace(cmd.path);
-	std::string result = "{\"accepted\":true,\"path\":\"" + cmd.path + "\"}";
+	if(cmd.deduplicate && cmd.summaryPath.empty()) {
+		return ErrorResponse(cmd.id, "summary_path is required when deduplicate is true");
+	}
+	nes->StartControlFlowTrace(cmd.path, cmd.deduplicate, cmd.summaryPath);
+	std::string result = "{\"accepted\":true,\"path\":\"" + cmd.path + "\"";
+	if(cmd.deduplicate) {
+		result += ",\"deduplicate\":true,\"summary_path\":\"" + cmd.summaryPath + "\"";
+	}
+	result += "}";
 	return OkResponse(cmd.id, result);
 }
 
@@ -875,6 +891,27 @@ std::string McpServer::ExecStopControlFlowTrace(McpTypedCommand& cmd)
 	}
 	nes->StopControlFlowTrace();
 	return OkResponse(cmd.id, R"({"accepted":true})");
+}
+
+std::string McpServer::ExecGetControlFlowTraceStats(McpTypedCommand& cmd)
+{
+	shared_ptr<IConsole> console = _emu->GetConsole();
+	NesConsole* nes = dynamic_cast<NesConsole*>(console.get());
+	if(!nes) {
+		return ErrorResponse(cmd.id, "no NES ROM loaded");
+	}
+	NesControlFlowTracer* tracer = nes->GetControlFlowTracer();
+	if(!tracer || !tracer->IsEnabled()) {
+		return ErrorResponse(cmd.id, "no control-flow trace is active");
+	}
+	auto s = tracer->ConsumeStats();
+	char buf[256];
+	int n = snprintf(buf, sizeof(buf),
+		"{\"eventsSeen\":%llu,\"uniqueEvents\":%llu,\"newEventsSinceLastStats\":%llu}",
+		(unsigned long long)s.eventsSeen,
+		(unsigned long long)s.uniqueEvents,
+		(unsigned long long)s.newEventsSinceLastStats);
+	return OkResponse(cmd.id, std::string(buf, n));
 }
 
 std::string McpServer::ExecPause(McpTypedCommand& cmd)

@@ -52,12 +52,12 @@ NesConsole::~NesConsole()
 	}
 }
 
-void NesConsole::StartControlFlowTrace(const string& filename)
+void NesConsole::StartControlFlowTrace(const string& filename, bool deduplicate, const string& summaryPath)
 {
 	if(!_cfTracer) {
 		_cfTracer.reset(new NesControlFlowTracer(this));
 	}
-	_cfTracer->Start(filename);
+	_cfTracer->Start(filename, deduplicate, summaryPath);
 	if(_cpu && _cfTracer->IsEnabled()) {
 		_cpu->SetControlFlowTracer(_cfTracer.get());
 	}
