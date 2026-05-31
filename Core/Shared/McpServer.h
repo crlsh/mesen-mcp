@@ -42,7 +42,9 @@ enum class McpCommandType {
 	GetCallstack,
 	SetWriteLog,
 	GetWriteLog,
-	SetSpeed
+	SetSpeed,
+	StartControlFlowTrace,
+	StopControlFlowTrace
 };
 
 struct McpTypedCommand {
@@ -160,6 +162,8 @@ private:
 	std::string ExecSetWriteLog(McpTypedCommand& cmd);
 	std::string ExecGetWriteLog(McpTypedCommand& cmd);
 	std::string ExecSetSpeed(McpTypedCommand& cmd);
+	std::string ExecStartControlFlowTrace(McpTypedCommand& cmd);
+	std::string ExecStopControlFlowTrace(McpTypedCommand& cmd);
 
 	static std::string OkResponse(int id, const std::string& resultJson);
 	static std::string ErrorResponse(int id, const std::string& error);

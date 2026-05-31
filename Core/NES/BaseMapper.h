@@ -3,6 +3,7 @@
 #include "pch.h"
 #include "NES/INesMemoryHandler.h"
 #include "NES/NesTypes.h"
+#include "NES/PrgWindow.h"
 #include "NES/RomData.h"
 #include "Debugger/DebugTypes.h"
 #include "Shared/Emulator.h"
@@ -261,6 +262,16 @@ public:
 	CartridgeState GetState();
 	
 	AddressInfo GetAbsoluteAddress(uint16_t relativeAddr);
+
+	//Control-flow tracer helpers (NES-only) — see Core/NES/Debugger/NesControlFlowTracer.
+	//ResolveCpuAddressToPrgOffset returns the PRG-ROM offset under the current effective
+	//PRG map, or nullopt when the address isn't backed by PRG-ROM (e.g. WRAM, open bus).
+	//GetCurrentPrgMap walks the $8000-$FFFF page table and coalesces a window every time
+	//(page -> PRG offset) continuity breaks. Bank numbers are reported only when the
+	//window's start offset is an exact multiple of the window's own size; otherwise -1.
+	optional<PrgLocation> ResolveCpuAddressToPrgOffset(uint16_t cpuAddr);
+	vector<PrgWindow> GetCurrentPrgMap();
+
 	void GetPpuAbsoluteAddress(uint16_t relativeAddr, AddressInfo& info);
 	AddressInfo GetPpuAbsoluteAddress(uint32_t relativeAddr);
 	AddressInfo GetRelativeAddress(AddressInfo& addr);

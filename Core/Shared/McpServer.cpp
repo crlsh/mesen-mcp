@@ -324,6 +324,11 @@ std::shared_ptr<McpTypedCommand> McpServer::ParseCommand(const std::string& json
 	} else if(method == "set_speed") {
 		cmd->type = McpCommandType::SetSpeed;
 		cmd->speed = ExtractInt(json, "speed", 100);
+	} else if(method == "start_control_flow_trace") {
+		cmd->type = McpCommandType::StartControlFlowTrace;
+		cmd->path = ExtractString(json, "path");
+	} else if(method == "stop_control_flow_trace") {
+		cmd->type = McpCommandType::StopControlFlowTrace;
 	} else {
 		return nullptr;
 	}
@@ -352,6 +357,13 @@ bool McpServer::CanExecuteDirect(McpCommandType type)
 	// SetSpeed only writes settings + toggles a flag — no emu-thread state involved.
 	// Run direct so speed changes work even while free-running (no debugger break).
 	if(type == McpCommandType::SetSpeed) return true;
+
+	//Start/StopControlFlowTrace install or clear a single pointer + open/close a file.
+	//The pointer write is the only race with the emu thread and it's a single aligned
+	//uint64 store — torn writes don't apply on x86-64. Worst case the emu thread sees
+	//the new pointer one instruction later, which is harmless.
+	if(type == McpCommandType::StartControlFlowTrace) return true;
+	if(type == McpCommandType::StopControlFlowTrace) return true;
 
 	// All other commands need the debugger to be stopped (core thread sleeping
 	// in SleepUntilResume), otherwise they would race with the running emu.
@@ -399,6 +411,8 @@ std::string McpServer::ExecuteCommandDirect(McpTypedCommand& cmd)
 		case McpCommandType::SetWriteLog: return ExecSetWriteLog(cmd);
 		case McpCommandType::GetWriteLog: return ExecGetWriteLog(cmd);
 		case McpCommandType::SetSpeed: return ExecSetSpeed(cmd);
+		case McpCommandType::StartControlFlowTrace: return ExecStartControlFlowTrace(cmd);
+		case McpCommandType::StopControlFlowTrace: return ExecStopControlFlowTrace(cmd);
 		default: return ErrorResponse(cmd.id, "command not supported in direct mode");
 	}
 }
@@ -594,6 +608,8 @@ std::string McpServer::ExecuteCommand(McpTypedCommand& cmd)
 		case McpCommandType::SetWriteLog: return ExecSetWriteLog(cmd);
 		case McpCommandType::GetWriteLog: return ExecGetWriteLog(cmd);
 		case McpCommandType::SetSpeed: return ExecSetSpeed(cmd);
+		case McpCommandType::StartControlFlowTrace: return ExecStartControlFlowTrace(cmd);
+		case McpCommandType::StopControlFlowTrace: return ExecStopControlFlowTrace(cmd);
 		default: return ErrorResponse(cmd.id, "unknown command type");
 	}
 }
@@ -833,6 +849,32 @@ std::string McpServer::ExecSetSpeed(McpTypedCommand& cmd)
 
 	std::string result = "{\"accepted\":true,\"speed\":" + std::to_string(speed) + "}";
 	return OkResponse(cmd.id, result);
+}
+
+std::string McpServer::ExecStartControlFlowTrace(McpTypedCommand& cmd)
+{
+	if(cmd.path.empty()) {
+		return ErrorResponse(cmd.id, "path is required");
+	}
+	shared_ptr<IConsole> console = _emu->GetConsole();
+	NesConsole* nes = dynamic_cast<NesConsole*>(console.get());
+	if(!nes) {
+		return ErrorResponse(cmd.id, "no NES ROM loaded");
+	}
+	nes->StartControlFlowTrace(cmd.path);
+	std::string result = "{\"accepted\":true,\"path\":\"" + cmd.path + "\"}";
+	return OkResponse(cmd.id, result);
+}
+
+std::string McpServer::ExecStopControlFlowTrace(McpTypedCommand& cmd)
+{
+	shared_ptr<IConsole> console = _emu->GetConsole();
+	NesConsole* nes = dynamic_cast<NesConsole*>(console.get());
+	if(!nes) {
+		return ErrorResponse(cmd.id, "no NES ROM loaded");
+	}
+	nes->StopControlFlowTrace();
+	return OkResponse(cmd.id, R"({"accepted":true})");
 }
 
 std::string McpServer::ExecPause(McpTypedCommand& cmd)

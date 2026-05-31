@@ -7,6 +7,7 @@
 #include "NES/NesMemoryManager.h"
 #include "NES/RomData.h"
 #include "NES/Epsm.h"
+#include "NES/Debugger/NesControlFlowTracer.h"
 #include "Debugger/DebugTypes.h"
 #include "Shared/MessageManager.h"
 #include "Shared/CheatManager.h"
@@ -891,7 +892,16 @@ void BaseMapper::WriteRam(uint16_t addr, uint8_t value)
 			}
 			value &= prgValue;
 		}
-		WriteRegister(addr, value);
+
+		NesControlFlowTracer* tracer = _console ? _console->GetControlFlowTracer() : nullptr;
+		if(tracer && tracer->IsEnabled()) {
+			vector<PrgWindow> before = GetCurrentPrgMap();
+			WriteRegister(addr, value);
+			vector<PrgWindow> after = GetCurrentPrgMap();
+			tracer->LogMapperWrite(addr, value, before, after);
+		} else {
+			WriteRegister(addr, value);
+		}
 	} else {
 		WritePrgRam(addr, value);
 	}
@@ -1030,6 +1040,16 @@ AddressInfo BaseMapper::GetAbsoluteAddress(uint16_t relativeAddr)
 		}
 	}
 	return info;
+}
+
+optional<PrgLocation> BaseMapper::ResolveCpuAddressToPrgOffset(uint16_t cpuAddr)
+{
+	return PrgMap::ResolveOffset(cpuAddr, _prgPages, _prgRom, _prgSize, InternalGetPrgPageSize());
+}
+
+vector<PrgWindow> BaseMapper::GetCurrentPrgMap()
+{
+	return PrgMap::BuildMap(_prgPages, _prgRom, _prgSize);
 }
 
 void BaseMapper::GetPpuAbsoluteAddress(uint16_t relativeAddr, AddressInfo& info)

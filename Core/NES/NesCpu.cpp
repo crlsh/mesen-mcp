@@ -99,6 +99,10 @@ void NesCpu::Reset(bool softReset, ConsoleRegion region)
 	//Use _memoryManager->Read() directly to prevent clocking the PPU/APU when setting PC at reset
 	_state.PC = _memoryManager->Read(NesCpu::ResetVector) | _memoryManager->Read(NesCpu::ResetVector+1) << 8;
 
+#ifndef DUMMYCPU
+	if(_cfTracer) _cfTracer->LogReset(_state.PC);
+#endif
+
 	if(softReset) {
 		SetFlags(PSFlags::Interrupt);
 		_state.SP -= 0x03;
@@ -204,6 +208,7 @@ void NesCpu::IRQ()
 
 		#ifndef DUMMYCPU
 		_emu->ProcessInterrupt<CpuType::Nes>(originalPc, _state.PC, true);
+		if(_cfTracer) _cfTracer->LogNmiEntry(originalPc, _state.PC);
 		#endif
 	} else {
 		Push((uint8_t)(PS() | PSFlags::Reserved));
@@ -213,11 +218,19 @@ void NesCpu::IRQ()
 
 		#ifndef DUMMYCPU
 		_emu->ProcessInterrupt<CpuType::Nes>(originalPc, _state.PC, false);
+		if(_cfTracer) _cfTracer->LogIrqEntry(originalPc, _state.PC);
 		#endif
 	}
 }
 
 void NesCpu::BRK() {
+#ifndef DUMMYCPU
+	//At BRK handler entry, Exec() has consumed the opcode byte (PC++ in GetOPCode)
+	//and FetchOperand (M::Imp) called DummyRead but did not advance PC.
+	//So PC points at the byte AFTER the BRK opcode -> opcode address = PC - 1.
+	uint16_t srcPc = (uint16_t)(PC() - 1);
+	bool divertedToNmi = _needNmi;
+#endif
 	Push((uint16_t)(PC() + 1));
 
 	uint8_t flags = PS() | PSFlags::Break | PSFlags::Reserved;
@@ -233,6 +246,10 @@ void NesCpu::BRK() {
 
 		SetPC(MemoryReadWord(NesCpu::IRQVector));
 	}
+
+#ifndef DUMMYCPU
+	if(_cfTracer) _cfTracer->LogBrk(srcPc, _state.PC, divertedToNmi);
+#endif
 
 	//Ensure we don't start an NMI right after running a BRK instruction (first instruction in IRQ handler must run first - needed for nmi_and_brk test)
 	_prevNeedNmi = false;

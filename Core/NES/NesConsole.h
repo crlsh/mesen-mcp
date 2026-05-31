@@ -20,6 +20,7 @@ class BaseControlManager;
 class HdAudioDevice;
 class HdPackBuilder;
 class Epsm;
+class NesControlFlowTracer;
 struct HdPackData;
 struct HdPackBuilderOptions;
 
@@ -44,6 +45,7 @@ private:
 	unique_ptr<BaseMapper> _mapper;
 	unique_ptr<NesControlManager> _controlManager;
 	unique_ptr<NesSoundMixer> _mixer;
+	unique_ptr<NesControlFlowTracer> _cfTracer;
 
 	safe_ptr<HdPackData> _hdData;
 	unique_ptr<HdAudioDevice> _hdAudioDevice;
@@ -74,6 +76,9 @@ public:
 	NesMemoryManager* GetMemoryManager() { return _memoryManager.get(); }
 	BaseMapper* GetMapper() { return _mapper.get(); }
 	NesSoundMixer* GetSoundMixer() { return _mixer.get(); }
+	__forceinline NesControlFlowTracer* GetControlFlowTracer() { return _cfTracer.get(); }
+	void StartControlFlowTrace(const string& filename);
+	void StopControlFlowTrace();
 	Emulator* GetEmulator();
 	NesConfig& GetNesConfig();
 

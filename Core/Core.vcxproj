@@ -459,6 +459,8 @@
     <ClInclude Include="NES\Debugger\NesAssembler.h" />
     <ClInclude Include="NES\Debugger\NesEventManager.h" />
     <ClInclude Include="NES\Debugger\NesTraceLogger.h" />
+    <ClInclude Include="NES\Debugger\NesControlFlowTracer.h" />
+    <ClInclude Include="NES\PrgWindow.h" />
     <ClInclude Include="NES\DefaultNesPpu.h" />
     <ClInclude Include="NES\HdPacks\HdAudioDevice.h" />
     <ClInclude Include="NES\HdPacks\HdData.h" />
@@ -858,6 +860,8 @@
     <ClCompile Include="NES\Debugger\NesAssembler.cpp" />
     <ClCompile Include="NES\Debugger\NesEventManager.cpp" />
     <ClCompile Include="NES\Debugger\NesTraceLogger.cpp" />
+    <ClCompile Include="NES\Debugger\NesControlFlowTracer.cpp" />
+    <ClCompile Include="NES\Debugger\NesControlFlowTraceTests.cpp" />
     <ClCompile Include="NES\Epsm.cpp" />
     <ClCompile Include="NES\HdPacks\HdAudioDevice.cpp" />
     <ClCompile Include="NES\HdPacks\HdNesPack.cpp" />

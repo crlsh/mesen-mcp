@@ -21,6 +21,7 @@
 #include "NES/BisqwitNtscFilter.h"
 #include "NES/NesConstants.h"
 #include "NES/Epsm.h"
+#include "NES/Debugger/NesControlFlowTracer.h"
 #include "NES/Mappers/VsSystem/VsControlManager.h"
 #include "NES/Mappers/NSF/NsfMapper.h"
 #include "NES/Mappers/FDS/Fds.h"
@@ -48,6 +49,27 @@ NesConsole::~NesConsole()
 	shared_ptr<HdPackData> hdData = _hdData.lock();
 	if(hdData) {
 		hdData->CancelLoad();
+	}
+}
+
+void NesConsole::StartControlFlowTrace(const string& filename)
+{
+	if(!_cfTracer) {
+		_cfTracer.reset(new NesControlFlowTracer(this));
+	}
+	_cfTracer->Start(filename);
+	if(_cpu && _cfTracer->IsEnabled()) {
+		_cpu->SetControlFlowTracer(_cfTracer.get());
+	}
+}
+
+void NesConsole::StopControlFlowTrace()
+{
+	if(_cpu) {
+		_cpu->SetControlFlowTracer(nullptr);
+	}
+	if(_cfTracer) {
+		_cfTracer->Stop();
 	}
 }
 
@@ -183,6 +205,12 @@ LoadRomResult NesConsole::LoadRom(VirtualFile& romFile)
 		}
 
 		_mapper->InitSpecificMapper(romData);
+
+		//Re-install the active control-flow tracer onto the freshly-created CPU,
+		//in case the user started tracing before loading a ROM.
+		if(_cfTracer && _cfTracer->IsEnabled()) {
+			_cpu->SetControlFlowTracer(_cfTracer.get());
+		}
 
 		if(_mapper->GetEpsm()) {
 			_memoryManager->RegisterIODevice(_mapper->GetEpsm());

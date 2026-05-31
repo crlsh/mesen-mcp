@@ -9,6 +9,7 @@
 #include "Utilities/ISerializable.h"
 #include "NesTypes.h"
 #include "Shared/MemoryOperationType.h"
+#include "NES/Debugger/NesControlFlowTracer.h"
 
 enum class ConsoleRegion;
 class NesConsole;
@@ -54,6 +55,10 @@ private:
 
 	bool _prevRunIrq = false;
 	bool _runIrq = false;
+
+	//Cached pointer to the active control-flow tracer (set by NesConsole::Start/Stop).
+	//When null, all opcode hooks compile down to a single null check.
+	NesControlFlowTracer* _cfTracer = nullptr;
 	
 	bool _prevNmiFlag = false;
 	bool _prevNeedNmi = false;
@@ -510,23 +515,56 @@ private:
 	void ROR_Memory() { RORAddr(); }
 
 	void JMP_Abs() {
-		JMP(GetOperand());
+#ifndef DUMMYCPU
+		uint16_t srcPc = (uint16_t)(PC() - 3);
+#endif
+		uint16_t dst = GetOperand();
+#ifndef DUMMYCPU
+		if(_cfTracer) _cfTracer->LogJmpAbs(srcPc, dst);
+#endif
+		JMP(dst);
 	}
-	void JMP_Ind() { JMP(GetInd()); }
+	void JMP_Ind() {
+#ifndef DUMMYCPU
+		uint16_t srcPc = (uint16_t)(PC() - 3);
+		uint16_t ptr = GetOperand();
+#endif
+		uint16_t dst = GetInd();
+#ifndef DUMMYCPU
+		if(_cfTracer) _cfTracer->LogJmpIndirect(srcPc, ptr, dst);
+#endif
+		JMP(dst);
+	}
 
 	void JSR() {
+#ifndef DUMMYCPU
+		uint16_t srcPc = (uint16_t)(PC() - 1); //JSR opcode byte (we've already advanced past it; operand fetch is below)
+#endif
 		uint8_t lo = ReadByte();
 		DummyRead();
 		Push(PC());
 		uint16_t addr = (ReadByte() << 8) | lo;
+#ifndef DUMMYCPU
+		if(_cfTracer) _cfTracer->LogJsr(srcPc, addr);
+#endif
 		JMP(addr);
 	}
 
 	void RTS() {
 		DummyRead();
+#ifndef DUMMYCPU
+		uint16_t srcPc = (uint16_t)(PC() - 1); //byte holding the RTS opcode
+		uint8_t stackBefore = SP();
+#endif
 		uint16_t addr = PopWord();
+#ifndef DUMMYCPU
+		uint8_t stackAfter = SP();
+#endif
 		DummyRead();
 		SetPC(addr + 1);
+#ifndef DUMMYCPU
+		if(_cfTracer) _cfTracer->LogRts(srcPc, addr, (uint16_t)(addr + 1), stackBefore, stackAfter);
+#endif
 	}
 
 	void BCC() {
@@ -573,8 +611,19 @@ private:
 	
 	void RTI() {
 		DummyRead();
+#ifndef DUMMYCPU
+		uint16_t srcPc = (uint16_t)(PC() - 1); //byte holding the RTI opcode
+		uint8_t stackBefore = SP();
+#endif
 		SetPS(Pop());
-		SetPC(PopWord());
+		uint16_t pulled = PopWord();
+#ifndef DUMMYCPU
+		uint8_t stackAfter = SP();
+#endif
+		SetPC(pulled);
+#ifndef DUMMYCPU
+		if(_cfTracer) _cfTracer->LogRti(srcPc, pulled, stackBefore, stackAfter);
+#endif
 	}
 
 	void NOP() {
@@ -805,6 +854,8 @@ protected:
 
 public:
 	NesCpu(NesConsole* console);
+
+	__forceinline void SetControlFlowTracer(NesControlFlowTracer* tracer) { _cfTracer = tracer; }
 	virtual ~NesCpu() = default;
 	
 	uint64_t GetCycleCount() { return _state.CycleCount; }

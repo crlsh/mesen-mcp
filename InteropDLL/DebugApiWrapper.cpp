@@ -22,10 +22,14 @@
 #include "Core/Debugger/ITraceLogger.h"
 #include "Core/Debugger/TraceLogFileSaver.h"
 #include "Core/Debugger/FrozenAddressManager.h"
+#include "Core/NES/NesConsole.h"
+#include "Core/NES/Debugger/NesControlFlowTracer.h"
 #include "Core/Gameboy/GbTypes.h"
 #include "Utilities/StringUtilities.h"
 
 extern unique_ptr<Emulator> _emu;
+
+namespace NesControlFlowTraceTests { void RunAll(); uint32_t GetFailureCount(); }
 
 template<typename T>
 T WrapDebuggerCall(std::function<T(Debugger* debugger)> func)
@@ -84,6 +88,30 @@ extern "C"
 
 	DllExport void __stdcall StartLogTraceToFile(const char* filename) { WithDebugger(void, GetTraceLogFileSaver()->StartLogging(filename)); }
 	DllExport void __stdcall StopLogTraceToFile() { WithDebugger(void, GetTraceLogFileSaver()->StopLogging()); }
+
+	//Control-flow trace (NES). Does NOT require the debugger to be attached: writes a JSONL
+	//file with one event per JSR/JMP/RTS/RTI/BRK/RESET/NMI/IRQ/MAPPER_WRITE.
+	DllExport void __stdcall StartControlFlowTraceToFile(const char* filename)
+	{
+		shared_ptr<IConsole> console = _emu->GetConsole();
+		if(NesConsole* nes = dynamic_cast<NesConsole*>(console.get())) {
+			nes->StartControlFlowTrace(string(filename ? filename : ""));
+		}
+	}
+
+	DllExport void __stdcall StopControlFlowTraceToFile()
+	{
+		shared_ptr<IConsole> console = _emu->GetConsole();
+		if(NesConsole* nes = dynamic_cast<NesConsole*>(console.get())) {
+			nes->StopControlFlowTrace();
+		}
+	}
+
+	DllExport uint32_t __stdcall RunControlFlowTraceTests()
+	{
+		NesControlFlowTraceTests::RunAll();
+		return NesControlFlowTraceTests::GetFailureCount();
+	}
 
 	DllExport void __stdcall SetBreakpoints(Breakpoint breakpoints[], uint32_t length) { WithDebugger(void, SetBreakpoints(breakpoints, length)); }
 	
