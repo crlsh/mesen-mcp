@@ -1633,13 +1633,31 @@ std::string McpServer::ExecGetWriteLog(McpTypedCommand& cmd)
 
 bool McpServer::SetInput(BaseControlDevice* device)
 {
-	// Only override if we have sticky input for this port
 	if(_coreState.stickyInputPort < 0) return false;
 	if(device->GetPort() != (uint8_t)_coreState.stickyInputPort) return false;
 
-	ControlDeviceState state;
-	state.State.push_back((uint8_t)(_coreState.stickyInputButtons & 0xFF));
-	device->SetRawState(state);
+	// ponytail: OR sticky bits onto human state ONLY for standard pads,
+	// so keyboard + MCP can drive the controller together. Other devices
+	// (zapper, keyboard, mouse, system action manager) keep the legacy replace
+	// behavior to avoid corrupting their custom state layout.
+	ControllerType type = device->GetControllerType();
+	bool isStandardPad =
+		type == ControllerType::NesController ||
+		type == ControllerType::FamicomController ||
+		type == ControllerType::FamicomControllerP2 ||
+		type == ControllerType::SnesController;
+
+	uint8_t sticky = (uint8_t)(_coreState.stickyInputButtons & 0xFF);
+	if(isStandardPad) {
+		ControlDeviceState current = device->GetRawState();
+		if(current.State.empty()) current.State.push_back(sticky);
+		else current.State[0] |= sticky;
+		device->SetRawState(current);
+	} else {
+		ControlDeviceState state;
+		state.State.push_back(sticky);
+		device->SetRawState(state);
+	}
 	device->RefreshStateBuffer();
 	return true;
 }
