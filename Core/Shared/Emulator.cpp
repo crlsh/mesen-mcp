@@ -166,14 +166,15 @@ void Emulator::Run()
 	_lastFrameTimer.Reset();
 
 	while(!_stopFlag) {
-		// Drain MCP commands every iteration (like MesenX)
+		// MCP tasks execute only on the emulation thread.  When MCP is detached,
+		// the controller is inert and the original Mesen loop is unchanged.
 		if(_mcpServer) {
-			_mcpServer->DrainCommandQueue();
+			PumpMcpCommands(McpExecutionPoint::MainLoop);
 			// Execute pending MCP intentions after processing commands
 			_mcpServer->ExecutePendingIntentions();
 		}
 
-		if(_mcpServer && _mcpServer->IsExternalControlled()) {
+		if(_mcpExecutionController.IsAttached() && _mcpExecutionController.IsClockGated()) {
 			// MCP mode: clock authority belongs to MCP, not UI.
 			std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(1));
 		} else {
@@ -212,6 +213,22 @@ void Emulator::Run()
 
 	PlatformUtilities::EnableScreensaver();
 	PlatformUtilities::RestoreTimerResolution();
+}
+
+void Emulator::PumpMcpCommands(McpExecutionPoint point)
+{
+	_mcpExecutionController.Pump(point);
+}
+
+void Emulator::NotifyMcpDebuggerStopped(bool breakpoint)
+{
+	_mcpExecutionController.NotifyDebuggerStopped(breakpoint);
+	PumpMcpCommands(McpExecutionPoint::DebuggerStop);
+}
+
+void Emulator::NotifyMcpDebuggerResumed()
+{
+	_mcpExecutionController.NotifyDebuggerResumed();
 }
 
 void Emulator::ProcessAutoSaveState()

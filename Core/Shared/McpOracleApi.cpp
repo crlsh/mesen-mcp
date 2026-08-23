@@ -93,12 +93,10 @@ std::string McpServer::ExecLoadStateFile(McpTypedCommand& cmd)
 	// Routine seeding requires an atomic restore boundary: loading a state must
 	// never let the emulation loop run instructions before RAM and breakpoints
 	// are installed by the TCP client.
-	_coreState.freeRunning = false;
-	_emu->Pause();
+	_emu->GetMcpExecutionController().CloseClock();
 	if(!_emu->GetSaveStateManager()->LoadState(cmd.path, false)) {
 		return ErrorResponse(cmd.id, "unable to load state");
 	}
-	_emu->Pause();
 	return OkResponse(cmd.id, R"({"loaded":true,"paused":true})");
 }
 
@@ -187,9 +185,8 @@ std::string McpServer::ExecWaitForBreak(McpTypedCommand& cmd)
 	if(timeoutMs < 1) timeoutMs = 1;
 	if(timeoutMs > 600000) timeoutMs = 600000;
 	for(int elapsed = 0; elapsed < timeoutMs; elapsed += 5) {
-		DebuggerRequest request = _emu->GetDebugger(false);
-		Debugger* debugger = request.GetDebugger();
-		if(debugger && debugger->IsExecutionStopped()) return ExecGetState(cmd);
+		McpExecutionState state = _emu->GetMcpExecutionController().GetSnapshot().State;
+		if(state == McpExecutionState::BreakpointStopped) return ExecGetState(cmd);
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	}
 	return ErrorResponse(cmd.id, "breakpoint timeout");

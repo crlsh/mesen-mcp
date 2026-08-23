@@ -12,6 +12,7 @@
 class Emulator;
 class Socket;
 class BaseControlDevice;
+enum class McpExecutionPoint : uint8_t;
 
 // Emulator phase state machine
 enum class EmuPhase {
@@ -117,7 +118,6 @@ struct McpCoreState {
 	int stickyInputPort = -1;
 	int stickyInputButtons = 0;
 	bool pendingReset = false;  // reset intention
-	bool freeRunning = false;   // true = emu runs frames normally, false = step_frame only
 
 	// Debugger intentions
 	bool pendingStepInstruction = false;
@@ -142,10 +142,6 @@ private:
 	std::atomic<bool> _stop;
 	uint16_t _port;
 
-	// Command queue: TCP thread enqueues, core thread drains
-	std::mutex _queueMutex;
-	std::queue<std::shared_ptr<McpTypedCommand>> _commandQueue;
-
 	McpCoreState _coreState;
 	bool _inputProviderRegistered = false;
 
@@ -161,6 +157,7 @@ private:
 	// Dual-path execution: direct on TCP thread when debugger is stopped
 	bool CanExecuteDirect(McpCommandType type);
 	std::string ExecuteCommandDirect(McpTypedCommand& cmd);
+	std::string ExecuteCommandAt(McpTypedCommand& cmd, McpExecutionPoint point);
 
 	// Core thread only (emu thread queue path)
 	std::string ExecuteCommand(McpTypedCommand& cmd);
@@ -180,6 +177,8 @@ private:
 	std::string ExecStepInstruction(McpTypedCommand& cmd);
 	std::string ExecStepInstructionDirect(McpTypedCommand& cmd);
 	std::string ExecStepFrameDirect(McpTypedCommand& cmd);
+	std::string ExecBeginStepInstruction(McpTypedCommand& cmd);
+	std::string ExecBeginStepFrame(McpTypedCommand& cmd);
 	std::string ExecContinue(McpTypedCommand& cmd);
 	std::string ExecGetCpuState(McpTypedCommand& cmd);
 	std::string ExecGetTrace(McpTypedCommand& cmd);
@@ -217,7 +216,6 @@ public:
 	void DrainCommandQueue();
 	void ExecutePendingIntentions();
 
-	bool IsExternalControlled() const { return _coreState.phase == EmuPhase::Running && !_coreState.freeRunning; }
 	McpCoreState& GetCoreState() { return _coreState; }
 
 	// IInputProvider — overrides controller state when MCP has sticky input

@@ -4,6 +4,7 @@
 #include "Core/Debugger/Debugger.h"
 #include "Core/Debugger/DebugUtilities.h"
 #include "Core/Shared/EmulatorLock.h"
+#include "Core/Shared/McpExecutionController.h"
 #include "Core/Shared/Interfaces/IConsole.h"
 #include "Core/Shared/Audio/AudioPlayerTypes.h"
 #include "Utilities/Timer.h"
@@ -90,6 +91,7 @@ private:
 	const shared_ptr<RewindManager> _rewindManager;
 
 	unique_ptr<McpServer> _mcpServer;
+	McpExecutionController _mcpExecutionController;
 
 	thread_local static thread::id _currentThreadId;
 	thread::id _emulationThreadId;
@@ -209,6 +211,10 @@ public:
 	GameServer* GetGameServer() { return _gameServer.get(); }
 	GameClient* GetGameClient() { return _gameClient.get(); }
 	McpServer* GetMcpServer() { return _mcpServer.get(); }
+	McpExecutionController& GetMcpExecutionController() { return _mcpExecutionController; }
+	void PumpMcpCommands(McpExecutionPoint point);
+	void NotifyMcpDebuggerStopped(bool breakpoint);
+	void NotifyMcpDebuggerResumed();
 	shared_ptr<SystemActionManager> GetSystemActionManager() { return _systemActionManager; }
 
 	BaseVideoFilter* GetVideoFilter(bool getDefaultFilter = false);

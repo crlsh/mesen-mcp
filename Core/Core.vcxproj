@@ -604,7 +604,8 @@
     <ClInclude Include="SNES\Debugger\TraceLogger\SnesCpuTraceLogger.h" />
     <ClInclude Include="SNES\DmaControllerTypes.h" />
     <ClInclude Include="Shared\Emulator.h" />
-    <ClInclude Include="Shared\McpServer.h" />
+	<ClInclude Include="Shared\McpServer.h" />
+	<ClInclude Include="Shared\McpExecutionController.h" />
     <ClInclude Include="Shared\McpWriteLog.h" />
     <ClInclude Include="..\..\mesen-oracle\native\MesenOracleRecorder.h" />
     <ClInclude Include="Gameboy\Gameboy.h" />
@@ -1010,7 +1011,9 @@
     <ClCompile Include="Debugger\DisassemblyInfo.cpp" />
     <ClCompile Include="SNES\SnesDmaController.cpp" />
     <ClCompile Include="Shared\Emulator.cpp" />
-    <ClCompile Include="Shared\McpServer.cpp" />
+	<ClCompile Include="Shared\McpServer.cpp" />
+	<ClCompile Include="Shared\McpExecutionController.cpp" />
+	<ClCompile Include="Shared\McpExecutionControllerTests.cpp" />
 	<ClCompile Include="Shared\McpOracleApi.cpp" />
     <ClCompile Include="Shared\McpWriteLog.cpp" />
     <ClCompile Include="..\..\mesen-oracle\native\MesenOracleRecorder.cpp" />

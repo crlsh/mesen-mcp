@@ -30,6 +30,7 @@
 extern unique_ptr<Emulator> _emu;
 
 namespace NesControlFlowTraceTests { void RunAll(); uint32_t GetFailureCount(); }
+namespace McpExecutionControllerTests { uint32_t RunAll(); }
 
 template<typename T>
 T WrapDebuggerCall(std::function<T(Debugger* debugger)> func)
@@ -111,6 +112,11 @@ extern "C"
 	{
 		NesControlFlowTraceTests::RunAll();
 		return NesControlFlowTraceTests::GetFailureCount();
+	}
+
+	DllExport uint32_t __stdcall RunMcpExecutionControllerTests()
+	{
+		return McpExecutionControllerTests::RunAll();
 	}
 
 	DllExport void __stdcall SetBreakpoints(Breakpoint breakpoints[], uint32_t length) { WithDebugger(void, SetBreakpoints(breakpoints, length)); }

@@ -260,11 +260,12 @@ void McpServer::HandleClient(std::unique_ptr<Socket> client)
 	if(CanExecuteDirect(cmd->type)) {
 		response = ExecuteCommandDirect(*cmd);
 	} else {
-		// Enqueue for core thread
-		{
-			std::lock_guard<std::mutex> lock(_queueMutex);
-			_commandQueue.push(cmd);
-		}
+		// The execution controller is the single mailbox for all core/debugger
+		// work.  It is pumped by the emulation thread both in the main loop and
+		// while stopped inside the debugger.
+		_emu->GetMcpExecutionController().Enqueue([this, cmd](McpExecutionPoint point) {
+			cmd->SetResponse(ExecuteCommandAt(*cmd, point));
+		});
 
 		// Block until core thread processes it (hard 30s timeout)
 		response = cmd->WaitForResponse();
@@ -415,59 +416,13 @@ bool McpServer::CanExecuteDirect(McpCommandType type)
 	// and can't drain commands between break events.
 	if(type == McpCommandType::GetState) return true;
 	if(_coreState.phase != EmuPhase::Running) return false;
-	if(type == McpCommandType::Continue) return true;
-
-	// SetSpeed only writes settings + toggles a flag — no emu-thread state involved.
-	// Run direct so speed changes work even while free-running (no debugger break).
-	if(type == McpCommandType::SetSpeed) return true;
-
-	//Start/StopControlFlowTrace install or clear a single pointer + open/close a file.
-	//The pointer write is the only race with the emu thread and it's a single aligned
-	//uint64 store — torn writes don't apply on x86-64. Worst case the emu thread sees
-	//the new pointer one instruction later, which is harmless.
-	if(type == McpCommandType::StartControlFlowTrace) return true;
-	if(type == McpCommandType::StopControlFlowTrace) return true;
-	//GetControlFlowTraceStats reads three uint64 counters — no emu-thread mutation.
+	// Read-only, internally synchronized observations do not mutate core state.
 	if(type == McpCommandType::GetControlFlowTraceStats) return true;
-	if(type == McpCommandType::QueueInputSequence) return true;
-	if(type == McpCommandType::ClearInputSequence) return true;
 	if(type == McpCommandType::GetInputSequenceStatus) return true;
 	if(type == McpCommandType::WaitForBreak) return true;
-	if(type == McpCommandType::SetWriteLog) return true;
 	if(type == McpCommandType::GetWriteLog) return true;
-	if(type == McpCommandType::StartOracleCapture) return true;
-	if(type == McpCommandType::StopOracleCapture) return true;
 	if(type == McpCommandType::GetOracleCaptureStatus) return true;
-
-	// All other commands need the debugger to be stopped (core thread sleeping
-	// in SleepUntilResume), otherwise they would race with the running emu.
-	DebuggerRequest dbgRequest = _emu->GetDebugger(false);
-	Debugger* dbg = dbgRequest.GetDebugger();
-	if(!dbg || !dbg->IsExecutionStopped()) return false;
-
-	switch(type) {
-		case McpCommandType::Continue:
-		case McpCommandType::StepInstruction:
-		case McpCommandType::StepFrame:
-		case McpCommandType::GetCpuState:
-		case McpCommandType::GetTrace:
-		case McpCommandType::ReadMemory:
-		case McpCommandType::WriteMemory:
-		case McpCommandType::SetBreakpoints:
-		case McpCommandType::SetInput:
-		case McpCommandType::Run:
-		case McpCommandType::Pause:
-		case McpCommandType::GetCallstack:
-		case McpCommandType::SetWriteLog:
-		case McpCommandType::GetWriteLog:
-		case McpCommandType::WriteMemoryBlock:
-		case McpCommandType::SaveStateFile:
-		case McpCommandType::LoadStateFile:
-		case McpCommandType::GetNesRuntimeState:
-			return true;
-		default:
-			return false;
-	}
+	return false;
 }
 
 std::string McpServer::ExecuteCommandDirect(McpTypedCommand& cmd)
@@ -514,18 +469,16 @@ std::string McpServer::ExecuteCommandDirect(McpTypedCommand& cmd)
 
 void McpServer::DrainCommandQueue()
 {
-	while(true) {
-		std::shared_ptr<McpTypedCommand> cmd;
-		{
-			std::lock_guard<std::mutex> lock(_queueMutex);
-			if(_commandQueue.empty()) break;
-			cmd = _commandQueue.front();
-			_commandQueue.pop();
-		}
+	_emu->PumpMcpCommands(McpExecutionPoint::MainLoop);
+}
 
-		std::string response = ExecuteCommand(*cmd);
-		cmd->SetResponse(response);
+std::string McpServer::ExecuteCommandAt(McpTypedCommand& cmd, McpExecutionPoint point)
+{
+	if(point == McpExecutionPoint::DebuggerStop) {
+		if(cmd.type == McpCommandType::StepInstruction) return ExecBeginStepInstruction(cmd);
+		if(cmd.type == McpCommandType::StepFrame) return ExecBeginStepFrame(cmd);
 	}
+	return ExecuteCommand(cmd);
 }
 
 void McpServer::ExecutePendingIntentions()
@@ -546,7 +499,6 @@ void McpServer::ExecutePendingIntentions()
 			_coreState.pendingRomPath.clear();
 
 			// Start paused after ROM load (MCP controls the clock)
-			_coreState.freeRunning = false;
 			_coreState.traceEnabled = false;
 		}
 
@@ -556,6 +508,7 @@ void McpServer::ExecutePendingIntentions()
 
 		_inputProviderRegistered = false;  // New console = new control manager
 		_coreState.phase = loaded ? EmuPhase::Running : EmuPhase::Error;
+		_emu->GetMcpExecutionController().FinishLoading(loaded);
 
 		// Force DrawPartialFrame=true so the emulator window stays visible
 		// when the debugger breaks (BP hit, step). Without this, breaks happen
@@ -649,6 +602,7 @@ void McpServer::ExecutePendingIntentions()
 					}
 					console->RunFrame();
 				}
+				_emu->GetMcpExecutionController().CompleteClockStep();
 			}
 		}
 	}
@@ -764,6 +718,7 @@ std::string McpServer::ExecLoadRom(McpTypedCommand& cmd)
 		std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
 		_coreState.pendingRomPath = cmd.path;
 		_coreState.phase = EmuPhase::LoadingRom;
+		_emu->GetMcpExecutionController().BeginLoading();
 	}
 
 	// Return immediately - execution happens in emu thread
@@ -774,10 +729,11 @@ std::string McpServer::ExecLoadRomDirect(McpTypedCommand& cmd)
 {
 	if(cmd.path.empty()) return ErrorResponse(cmd.id, "missing path");
 	_coreState.phase = EmuPhase::LoadingRom;
-	_coreState.freeRunning = false;
+	_emu->GetMcpExecutionController().BeginLoading();
 	bool loaded = _emu->LoadRom((VirtualFile)cmd.path, VirtualFile());
 	_inputProviderRegistered = false;
 	_coreState.phase = loaded ? EmuPhase::Running : EmuPhase::Error;
+	_emu->GetMcpExecutionController().FinishLoading(loaded);
 	return loaded ? OkResponse(cmd.id, R"({"loaded":true})") : ErrorResponse(cmd.id, "unable to load ROM");
 }
 
@@ -791,6 +747,9 @@ std::string McpServer::ExecStepFrame(McpTypedCommand& cmd)
 	int count = cmd.count;
 	if(count < 1) count = 1;
 	if(count > 3600) count = 3600;
+	if(!_emu->GetMcpExecutionController().RequestStep()) {
+		return ErrorResponse(cmd.id, "step_frame is invalid in the current execution state");
+	}
 
 	// Declare intention - do NOT execute frames
 	{
@@ -940,7 +899,11 @@ std::string McpServer::ExecRun(McpTypedCommand& cmd)
 		return ErrorResponse(cmd.id, "emulator not running");
 	}
 
-	_coreState.freeRunning = true;
+	McpExecutionController& controller = _emu->GetMcpExecutionController();
+	McpExecutionState state = controller.GetSnapshot().State;
+	if(state != McpExecutionState::Running && !controller.RequestRun()) {
+		return ErrorResponse(cmd.id, "run is invalid in the current execution state");
+	}
 
 	DebuggerRequest dbgRequest = _emu->GetDebugger(false);
 	Debugger* dbg = dbgRequest.GetDebugger();
@@ -1032,6 +995,14 @@ std::string McpServer::ExecPause(McpTypedCommand& cmd)
 	if(_coreState.phase != EmuPhase::Running) {
 		return ErrorResponse(cmd.id, "emulator not running");
 	}
+	McpExecutionController& controller = _emu->GetMcpExecutionController();
+	McpExecutionState state = controller.GetSnapshot().State;
+	if(state == McpExecutionState::ClockPaused || state == McpExecutionState::DebuggerPaused || state == McpExecutionState::BreakpointStopped) {
+		return OkResponse(cmd.id, R"({"accepted":true})");
+	}
+	if(!controller.RequestPause()) {
+		return ErrorResponse(cmd.id, "pause is invalid in the current execution state");
+	}
 
 	// Use the same path as the UI's Pause shortcut. Emulator::Pause() does:
 	//   if (debugger) debugger->Step(1, Step, BreakSource::Pause);  else _paused = true;
@@ -1039,8 +1010,8 @@ std::string McpServer::ExecPause(McpTypedCommand& cmd)
 	// Step-based pause that sets _executionStopped, not the _paused fallback
 	// (which doesn't update IsExecutionStopped()).
 	//
-	// Do NOT touch _coreState.freeRunning — IsExternalControlled would gate the
-	// emu loop and the queued Step(1) instruction would never execute.
+	// The execution controller remains in PauseRequested until the debugger
+	// reports the actual stop.
 	{
 		DebuggerRequest dbgRequest = _emu->GetDebugger(true);
 		(void)dbgRequest;
@@ -1059,9 +1030,9 @@ std::string McpServer::ExecGetState(McpTypedCommand& cmd)
 	if(_coreState.phase == EmuPhase::Idle && _emu->IsRunning()) {
 		DebuggerRequest readyRequest = _emu->GetDebugger(true);
 		if(readyRequest.GetDebugger()) {
-			_coreState.freeRunning = false;
 			_coreState.phase = EmuPhase::Running;
 			_inputProviderRegistered = false;
+			_emu->GetMcpExecutionController().Attach(true);
 		}
 	}
 
@@ -1071,9 +1042,10 @@ std::string McpServer::ExecGetState(McpTypedCommand& cmd)
 	DebuggerRequest dbgRequest = _emu->GetDebugger(false);
 	Debugger* dbg = dbgRequest.GetDebugger();
 	bool debuggerAvailable = dbg != nullptr;
-	bool debuggerStopped = dbg && dbg->IsExecutionStopped();
+	McpExecutionSnapshot execution = _emu->GetMcpExecutionController().GetSnapshot();
+	bool debuggerStopped = execution.State == McpExecutionState::DebuggerPaused || execution.State == McpExecutionState::BreakpointStopped;
 	bool mcpReady = phase == EmuPhase::Running && consoleLoaded && debuggerAvailable;
-	bool clockGated = phase == EmuPhase::Running && !_coreState.freeRunning;
+	bool clockGated = execution.State == McpExecutionState::ClockPaused;
 
 	const char* status = "idle_no_rom";
 	if(phase == EmuPhase::Error) {
@@ -1111,9 +1083,9 @@ std::string McpServer::ExecGetState(McpTypedCommand& cmd)
 	const char* clockOwner = phase != EmuPhase::Running ? "none"
 		: (debuggerStopped ? "debugger" : (clockGated ? "mcp" : "emulator"));
 	result << ",\"clock_owner\":\"" << clockOwner << "\"";
+	result << ",\"execution_generation\":" << execution.Generation;
 
-	// Add mode when running. Report "paused" if either the MCP clock gate is closed
-	// (!freeRunning) OR the debugger has broken — both cases mean emu is not advancing.
+	// Public mode comes only from the exclusive execution-controller state.
 	if(phase == EmuPhase::Running) {
 		bool stopped = clockGated || debuggerStopped;
 		result << ",\"mode\":\"" << (stopped ? "paused" : "free") << "\"";
@@ -1237,6 +1209,9 @@ std::string McpServer::ExecStepInstruction(McpTypedCommand& cmd)
 
 	int count = cmd.count;
 	if(count < 1) count = 1;
+	if(!_emu->GetMcpExecutionController().RequestStep()) {
+		return ErrorResponse(cmd.id, "step_instruction is invalid in the current execution state");
+	}
 
 	{
 		std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
@@ -1335,6 +1310,36 @@ std::string McpServer::ExecStepFrameDirect(McpTypedCommand& cmd)
 	return ExecGetCpuState(cmd);
 }
 
+std::string McpServer::ExecBeginStepInstruction(McpTypedCommand& cmd)
+{
+	if(_coreState.phase != EmuPhase::Running) return ErrorResponse(cmd.id, "emulator not running");
+	DebuggerRequest request = _emu->GetDebugger(true);
+	Debugger* debugger = request.GetDebugger();
+	IConsole* console = _emu->GetConsoleUnsafe();
+	if(!debugger || !console) return ErrorResponse(cmd.id, "debugger unavailable");
+	if(!_emu->GetMcpExecutionController().RequestStep()) {
+		return ErrorResponse(cmd.id, "step_instruction is invalid in the current execution state");
+	}
+	int count = std::max(1, cmd.count);
+	debugger->Step(GetMainCpuType(console->GetConsoleType()), count, StepType::Step);
+	return OkResponse(cmd.id, R"({"accepted":true})");
+}
+
+std::string McpServer::ExecBeginStepFrame(McpTypedCommand& cmd)
+{
+	if(_coreState.phase != EmuPhase::Running) return ErrorResponse(cmd.id, "emulator not running");
+	DebuggerRequest request = _emu->GetDebugger(true);
+	Debugger* debugger = request.GetDebugger();
+	IConsole* console = _emu->GetConsoleUnsafe();
+	if(!debugger || !console) return ErrorResponse(cmd.id, "debugger unavailable");
+	if(!_emu->GetMcpExecutionController().RequestStep()) {
+		return ErrorResponse(cmd.id, "step_frame is invalid in the current execution state");
+	}
+	int count = std::max(1, std::min(3600, cmd.count));
+	debugger->Step(GetMainCpuType(console->GetConsoleType()), count, StepType::PpuFrame);
+	return OkResponse(cmd.id, R"({"accepted":true})");
+}
+
 std::string McpServer::ExecContinue(McpTypedCommand& cmd)
 {
 	if(_coreState.phase != EmuPhase::Running) {
@@ -1347,8 +1352,11 @@ std::string McpServer::ExecContinue(McpTypedCommand& cmd)
 		return ErrorResponse(cmd.id, "debugger unavailable");
 	}
 
-	// Set freeRunning so the emu loop keeps running frames
-	_coreState.freeRunning = true;
+	McpExecutionController& controller = _emu->GetMcpExecutionController();
+	McpExecutionState state = controller.GetSnapshot().State;
+	if(state != McpExecutionState::Running && !controller.RequestRun()) {
+		return ErrorResponse(cmd.id, "continue is invalid in the current execution state");
+	}
 
 	// Debugger::Run() clears _waitForBreakResume, unblocking SleepUntilResume.
 	// Emu resumes running. Will stop again at next breakpoint.

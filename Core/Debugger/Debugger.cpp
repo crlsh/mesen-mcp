@@ -512,9 +512,12 @@ void Debugger::SleepUntilResume(CpuType sourceCpu, BreakSource source, MemoryOpe
 		PlatformUtilities::EnableScreensaver();
 	}
 
+	_emu->NotifyMcpDebuggerStopped(source == BreakSource::Breakpoint);
 	while((_waitForBreakResume && !_suspendRequestCount) || _breakRequestCount) {
+		_emu->PumpMcpCommands(McpExecutionPoint::DebuggerStop);
 		std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(_breakRequestCount ? 1 : 10));
 	}
+	_emu->NotifyMcpDebuggerResumed();
 
 	if(notificationSent) {
 		PlatformUtilities::DisableScreensaver();
