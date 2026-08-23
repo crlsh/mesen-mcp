@@ -439,6 +439,9 @@
     <ClCompile Include="Shared\McpServer.cpp">
       <Filter>Shared</Filter>
     </ClCompile>
+	<ClCompile Include="Shared\McpOracleApi.cpp">
+	  <Filter>Shared</Filter>
+	</ClCompile>
     <ClCompile Include="Shared\McpWriteLog.cpp">
       <Filter>Shared</Filter>
     </ClCompile>

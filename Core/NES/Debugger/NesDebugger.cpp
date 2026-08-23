@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "../../../../mesen-oracle/native/MesenOracleRecorder.h"
 #include "Debugger/DisassemblyInfo.h"
 #include "Debugger/Disassembler.h"
 #include "Debugger/CallstackManager.h"
@@ -114,6 +115,9 @@ void NesDebugger::ProcessInstruction()
 	uint16_t pc = state.PC;
 	uint8_t opCode = _memoryManager->DebugRead(pc);
 	AddressInfo addressInfo = _mapper->GetAbsoluteAddress(pc);
+	if(addressInfo.Address >= 0 && addressInfo.Type == MemoryType::NesPrgRom) {
+		MesenOracleRecorder::Instance().OnInstruction(_emu, _console, (uint32_t)addressInfo.Address);
+	}
 	MemoryOperationInfo operation(pc, opCode, MemoryOperationType::ExecOpCode, MemoryType::NesMemory);
 	InstructionProgress.LastMemOperation = operation;
 	InstructionProgress.StartCycle = state.CycleCount;
@@ -255,6 +259,7 @@ void NesDebugger::ProcessWrite(uint32_t addr, uint8_t value, MemoryOperationType
 			int32_t prgAddr = (addressInfo.Type == MemoryType::NesPrgRom) ? addressInfo.Address : -1;
 			wl.Record(
 				_cpu->GetCycleCount(),
+				_console->GetPpu()->GetFrameCount(),
 				pc,
 				(uint16_t)addr,
 				value,

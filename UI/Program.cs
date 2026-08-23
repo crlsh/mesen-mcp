@@ -51,7 +51,20 @@ namespace Mesen
 				return 0;
 			}
 
+			bool isTestRunner = CommandLineHelper.IsTestRunner(args);
+			if(isTestRunner) {
+				// Load the native DLL and dependencies from the build under test,
+				// never from a user's potentially stale global Mesen folder.
+				ConfigManager.UseTestRunnerHomeFolder(ConfigManager.DefaultPortableFolder);
+			}
 			Environment.CurrentDirectory = ConfigManager.HomeFolder;
+
+			// The headless runner must work on a clean machine.  In particular it
+			// must not open the first-run wizard during automated post-build tests.
+			if(isTestRunner) {
+				DependencyHelper.ExtractNativeDependencies(ConfigManager.HomeFolder);
+				return TestRunner.Run(args);
+			}
 
 			if(!File.Exists(ConfigManager.GetConfigFile())) {
 				//Could not find configuration file, show wizard
@@ -70,10 +83,6 @@ namespace Mesen
 
 			//Extract core dll & other native dependencies
 			DependencyHelper.ExtractNativeDependencies(ConfigManager.HomeFolder);
-
-			if(CommandLineHelper.IsTestRunner(args)) {
-				return TestRunner.Run(args);
-			}
 
 			using SingleInstance instance = SingleInstance.Instance;
 			instance.Init(args);

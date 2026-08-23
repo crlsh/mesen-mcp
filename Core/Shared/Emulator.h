@@ -35,6 +35,7 @@ class AudioPlayerHud;
 class GameServer;
 class GameClient;
 class McpServer;
+class MesenOracleRecorder;
 
 class IInputRecorder;
 class IInputProvider;
@@ -61,6 +62,7 @@ class Emulator
 private:
 	friend class DebuggerRequest;
 	friend class EmulatorLock;
+	friend class MesenOracleRecorder;
 
 	unique_ptr<thread> _emuThread;
 	unique_ptr<AudioPlayerHud> _audioPlayerHud;

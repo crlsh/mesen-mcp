@@ -126,6 +126,28 @@ std::string McpServer::ExtractJsonArray(const std::string& json, const std::stri
 	return "";
 }
 
+std::vector<int> McpServer::ExtractIntArray(const std::string& json, const std::string& key)
+{
+	std::string array = ExtractJsonArray(json, key);
+	std::vector<int> result;
+	if(array.size() < 2) return result;
+	size_t pos = 1;
+	while(pos + 1 < array.size()) {
+		while(pos < array.size() && (array[pos] == ' ' || array[pos] == '\t' || array[pos] == ',')) pos++;
+		bool negative = false;
+		if(pos < array.size() && array[pos] == '-') { negative = true; pos++; }
+		int value = 0;
+		bool found = false;
+		while(pos < array.size() && array[pos] >= '0' && array[pos] <= '9') {
+			value = value * 10 + (array[pos++] - '0');
+			found = true;
+		}
+		if(!found) break;
+		result.push_back(negative ? -value : value);
+	}
+	return result;
+}
+
 std::string McpServer::OkResponse(int id, const std::string& resultJson)
 {
 	return "{\"ok\":true,\"result\":" + resultJson + ",\"id\":" + std::to_string(id) + "}";
@@ -203,22 +225,20 @@ void McpServer::HandleClient(std::unique_ptr<Socket> client)
 {
 	std::string buffer;
 	char chunk[4096];
-
-	int received = client->Recv(chunk, sizeof(chunk) - 1, 0);
-	if(received <= 0) return;
-
-	chunk[received] = '\0';
-	buffer += chunk;
+	constexpr size_t MaxRequestSize = 1024 * 1024;
+	while(buffer.find('\n') == std::string::npos) {
+		int received = client->Recv(chunk, sizeof(chunk), 0);
+		if(received <= 0) return;
+		buffer.append(chunk, received);
+		if(buffer.size() > MaxRequestSize) {
+			std::string err = ErrorResponse(0, "request exceeds 1 MiB limit") + "\n";
+			client->Send((char*)err.c_str(), (int)err.size(), 0);
+			return;
+		}
+	}
 
 	// Look for complete line (newline-delimited JSON)
 	size_t nlPos = buffer.find('\n');
-	if(nlPos == std::string::npos) {
-		// Incomplete message - send error and close
-		std::string err = ErrorResponse(0, "incomplete request") + "\n";
-		client->Send((char*)err.c_str(), (int)err.size(), 0);
-		return;
-	}
-
 	std::string line = buffer.substr(0, nlPos);
 	if(!line.empty() && line.back() == '\r') line.pop_back();
 	if(line.empty()) {
@@ -329,11 +349,46 @@ std::shared_ptr<McpTypedCommand> McpServer::ParseCommand(const std::string& json
 		cmd->type = McpCommandType::StartControlFlowTrace;
 		cmd->path = ExtractString(json, "path");
 		cmd->deduplicate = ExtractInt(json, "deduplicate", 0) != 0;
+		cmd->eventMask = ExtractInt(json, "event_mask", 0x3FF);
+		cmd->graphDeduplicate = ExtractInt(json, "graph_deduplicate", 0) != 0;
 		cmd->summaryPath = ExtractString(json, "summary_path");
 	} else if(method == "stop_control_flow_trace") {
 		cmd->type = McpCommandType::StopControlFlowTrace;
 	} else if(method == "get_control_flow_trace_stats") {
 		cmd->type = McpCommandType::GetControlFlowTraceStats;
+	} else if(method == "write_memory_block") {
+		cmd->type = McpCommandType::WriteMemoryBlock;
+		cmd->address = ExtractInt(json, "address", -1);
+		cmd->values = ExtractIntArray(json, "data");
+	} else if(method == "save_state_file") {
+		cmd->type = McpCommandType::SaveStateFile;
+		cmd->path = ExtractString(json, "path");
+	} else if(method == "load_state_file") {
+		cmd->type = McpCommandType::LoadStateFile;
+		cmd->path = ExtractString(json, "path");
+	} else if(method == "get_nes_runtime_state") {
+		cmd->type = McpCommandType::GetNesRuntimeState;
+	} else if(method == "queue_input_sequence") {
+		cmd->type = McpCommandType::QueueInputSequence;
+		cmd->port = ExtractInt(json, "port", 0);
+		cmd->values = ExtractIntArray(json, "buttons");
+	} else if(method == "clear_input_sequence") {
+		cmd->type = McpCommandType::ClearInputSequence;
+	} else if(method == "get_input_sequence_status") {
+		cmd->type = McpCommandType::GetInputSequenceStatus;
+	} else if(method == "wait_for_break") {
+		cmd->type = McpCommandType::WaitForBreak;
+		cmd->count = ExtractInt(json, "timeout_ms", 30000);
+	} else if(method == "start_oracle_capture") {
+		cmd->type = McpCommandType::StartOracleCapture;
+		cmd->path = ExtractString(json, "path");
+		cmd->address = ExtractInt(json, "entry_prg", -1);
+		cmd->value = ExtractInt(json, "end_prg", -1);
+		cmd->count = ExtractInt(json, "max_rows", 0);
+	} else if(method == "stop_oracle_capture") {
+		cmd->type = McpCommandType::StopOracleCapture;
+	} else if(method == "get_oracle_capture_status") {
+		cmd->type = McpCommandType::GetOracleCaptureStatus;
 	} else {
 		return nullptr;
 	}
@@ -351,13 +406,16 @@ static CpuType GetMainCpuType(ConsoleType ct);
 
 bool McpServer::CanExecuteDirect(McpCommandType type)
 {
-	if(_coreState.phase != EmuPhase::Running) return false;
-
+	// With no console there is no emulation loop to drain the queue. ROM load
+	// must therefore bootstrap directly; LoadRom creates the emulation thread.
+	if(type == McpCommandType::LoadRom && _coreState.phase == EmuPhase::Idle) return true;
 	// GetState is always safe to run on the IO thread — it only reads atomics,
 	// frame count, and PC. NEVER queue it; queueing causes a 30s hang if the
 	// core thread is stuck in SleepUntilResume (e.g. inside a tight-loop BP)
 	// and can't drain commands between break events.
 	if(type == McpCommandType::GetState) return true;
+	if(_coreState.phase != EmuPhase::Running) return false;
+	if(type == McpCommandType::Continue) return true;
 
 	// SetSpeed only writes settings + toggles a flag — no emu-thread state involved.
 	// Run direct so speed changes work even while free-running (no debugger break).
@@ -371,6 +429,15 @@ bool McpServer::CanExecuteDirect(McpCommandType type)
 	if(type == McpCommandType::StopControlFlowTrace) return true;
 	//GetControlFlowTraceStats reads three uint64 counters — no emu-thread mutation.
 	if(type == McpCommandType::GetControlFlowTraceStats) return true;
+	if(type == McpCommandType::QueueInputSequence) return true;
+	if(type == McpCommandType::ClearInputSequence) return true;
+	if(type == McpCommandType::GetInputSequenceStatus) return true;
+	if(type == McpCommandType::WaitForBreak) return true;
+	if(type == McpCommandType::SetWriteLog) return true;
+	if(type == McpCommandType::GetWriteLog) return true;
+	if(type == McpCommandType::StartOracleCapture) return true;
+	if(type == McpCommandType::StopOracleCapture) return true;
+	if(type == McpCommandType::GetOracleCaptureStatus) return true;
 
 	// All other commands need the debugger to be stopped (core thread sleeping
 	// in SleepUntilResume), otherwise they would race with the running emu.
@@ -393,6 +460,10 @@ bool McpServer::CanExecuteDirect(McpCommandType type)
 		case McpCommandType::GetCallstack:
 		case McpCommandType::SetWriteLog:
 		case McpCommandType::GetWriteLog:
+		case McpCommandType::WriteMemoryBlock:
+		case McpCommandType::SaveStateFile:
+		case McpCommandType::LoadStateFile:
+		case McpCommandType::GetNesRuntimeState:
 			return true;
 		default:
 			return false;
@@ -402,6 +473,7 @@ bool McpServer::CanExecuteDirect(McpCommandType type)
 std::string McpServer::ExecuteCommandDirect(McpTypedCommand& cmd)
 {
 	switch(cmd.type) {
+		case McpCommandType::LoadRom: return ExecLoadRomDirect(cmd);
 		case McpCommandType::Continue: return ExecContinue(cmd);
 		case McpCommandType::StepInstruction: return ExecStepInstructionDirect(cmd);
 		case McpCommandType::StepFrame: return ExecStepFrameDirect(cmd);
@@ -421,6 +493,17 @@ std::string McpServer::ExecuteCommandDirect(McpTypedCommand& cmd)
 		case McpCommandType::StartControlFlowTrace: return ExecStartControlFlowTrace(cmd);
 		case McpCommandType::StopControlFlowTrace: return ExecStopControlFlowTrace(cmd);
 		case McpCommandType::GetControlFlowTraceStats: return ExecGetControlFlowTraceStats(cmd);
+		case McpCommandType::WriteMemoryBlock: return ExecWriteMemoryBlock(cmd);
+		case McpCommandType::SaveStateFile: return ExecSaveStateFile(cmd);
+		case McpCommandType::LoadStateFile: return ExecLoadStateFile(cmd);
+		case McpCommandType::GetNesRuntimeState: return ExecGetNesRuntimeState(cmd);
+		case McpCommandType::QueueInputSequence: return ExecQueueInputSequence(cmd);
+		case McpCommandType::ClearInputSequence: return ExecClearInputSequence(cmd);
+		case McpCommandType::GetInputSequenceStatus: return ExecGetInputSequenceStatus(cmd);
+		case McpCommandType::WaitForBreak: return ExecWaitForBreak(cmd);
+		case McpCommandType::StartOracleCapture: return ExecStartOracleCapture(cmd);
+		case McpCommandType::StopOracleCapture: return ExecStopOracleCapture(cmd);
+		case McpCommandType::GetOracleCaptureStatus: return ExecGetOracleCaptureStatus(cmd);
 		default: return ErrorResponse(cmd.id, "command not supported in direct mode");
 	}
 }
@@ -543,6 +626,13 @@ void McpServer::ExecutePendingIntentions()
 		if(frameCount > 0) {
 			IConsole* console = _emu->GetConsoleUnsafe();
 			if(console) {
+				// This queued path is used immediately after load_rom, before a
+				// debugger exists. Oracle capture is driven by
+				// NesDebugger::ProcessInstruction, so bootstrap it here too.
+				DebuggerRequest dbgRequest = _emu->GetDebugger(true);
+				if(!dbgRequest.GetDebugger()) {
+					return;
+				}
 				for(int i = 0; i < frameCount; i++) {
 					// Re-apply sticky input before each frame
 					if(_coreState.stickyInputPort >= 0) {
@@ -619,6 +709,17 @@ std::string McpServer::ExecuteCommand(McpTypedCommand& cmd)
 		case McpCommandType::StartControlFlowTrace: return ExecStartControlFlowTrace(cmd);
 		case McpCommandType::StopControlFlowTrace: return ExecStopControlFlowTrace(cmd);
 		case McpCommandType::GetControlFlowTraceStats: return ExecGetControlFlowTraceStats(cmd);
+		case McpCommandType::WriteMemoryBlock: return ExecWriteMemoryBlock(cmd);
+		case McpCommandType::SaveStateFile: return ExecSaveStateFile(cmd);
+		case McpCommandType::LoadStateFile: return ExecLoadStateFile(cmd);
+		case McpCommandType::GetNesRuntimeState: return ExecGetNesRuntimeState(cmd);
+		case McpCommandType::QueueInputSequence: return ExecQueueInputSequence(cmd);
+		case McpCommandType::ClearInputSequence: return ExecClearInputSequence(cmd);
+		case McpCommandType::GetInputSequenceStatus: return ExecGetInputSequenceStatus(cmd);
+		case McpCommandType::WaitForBreak: return ExecWaitForBreak(cmd);
+		case McpCommandType::StartOracleCapture: return ExecStartOracleCapture(cmd);
+		case McpCommandType::StopOracleCapture: return ExecStopOracleCapture(cmd);
+		case McpCommandType::GetOracleCaptureStatus: return ExecGetOracleCaptureStatus(cmd);
 		default: return ErrorResponse(cmd.id, "unknown command type");
 	}
 }
@@ -667,6 +768,17 @@ std::string McpServer::ExecLoadRom(McpTypedCommand& cmd)
 
 	// Return immediately - execution happens in emu thread
 	return OkResponse(cmd.id, R"({"accepted":true})");
+}
+
+std::string McpServer::ExecLoadRomDirect(McpTypedCommand& cmd)
+{
+	if(cmd.path.empty()) return ErrorResponse(cmd.id, "missing path");
+	_coreState.phase = EmuPhase::LoadingRom;
+	_coreState.freeRunning = false;
+	bool loaded = _emu->LoadRom((VirtualFile)cmd.path, VirtualFile());
+	_inputProviderRegistered = false;
+	_coreState.phase = loaded ? EmuPhase::Running : EmuPhase::Error;
+	return loaded ? OkResponse(cmd.id, R"({"loaded":true})") : ErrorResponse(cmd.id, "unable to load ROM");
 }
 
 std::string McpServer::ExecStepFrame(McpTypedCommand& cmd)
@@ -873,7 +985,8 @@ std::string McpServer::ExecStartControlFlowTrace(McpTypedCommand& cmd)
 	if(cmd.deduplicate && cmd.summaryPath.empty()) {
 		return ErrorResponse(cmd.id, "summary_path is required when deduplicate is true");
 	}
-	nes->StartControlFlowTrace(cmd.path, cmd.deduplicate, cmd.summaryPath);
+	nes->StartControlFlowTrace(cmd.path, cmd.deduplicate, cmd.summaryPath,
+		(uint32_t)cmd.eventMask, cmd.graphDeduplicate);
 	std::string result = "{\"accepted\":true,\"path\":\"" + cmd.path + "\"";
 	if(cmd.deduplicate) {
 		result += ",\"deduplicate\":true,\"summary_path\":\"" + cmd.summaryPath + "\"";
@@ -939,46 +1052,88 @@ std::string McpServer::ExecPause(McpTypedCommand& cmd)
 
 std::string McpServer::ExecGetState(McpTypedCommand& cmd)
 {
+	// A ROM supplied on Mesen's command line is loaded by the UI, outside the
+	// MCP load_rom command. Adopt it only once startup has finished far enough
+	// for debugger creation to succeed. This preserves UI navigation without a
+	// second, racing ROM load and closes the external MCP clock gate immediately.
+	if(_coreState.phase == EmuPhase::Idle && _emu->IsRunning()) {
+		DebuggerRequest readyRequest = _emu->GetDebugger(true);
+		if(readyRequest.GetDebugger()) {
+			_coreState.freeRunning = false;
+			_coreState.phase = EmuPhase::Running;
+			_inputProviderRegistered = false;
+		}
+	}
+
 	std::ostringstream result;
+	EmuPhase phase = _coreState.phase.load();
+	bool consoleLoaded = _emu->IsRunning();
+	DebuggerRequest dbgRequest = _emu->GetDebugger(false);
+	Debugger* dbg = dbgRequest.GetDebugger();
+	bool debuggerAvailable = dbg != nullptr;
+	bool debuggerStopped = dbg && dbg->IsExecutionStopped();
+	bool mcpReady = phase == EmuPhase::Running && consoleLoaded && debuggerAvailable;
+	bool clockGated = phase == EmuPhase::Running && !_coreState.freeRunning;
+
+	const char* status = "idle_no_rom";
+	if(phase == EmuPhase::Error) {
+		status = "error";
+	} else if(phase == EmuPhase::LoadingRom) {
+		status = "loading_rom";
+	} else if(phase == EmuPhase::Running && !consoleLoaded) {
+		status = "running_without_console";
+	} else if(consoleLoaded && !debuggerAvailable) {
+		status = "waiting_for_debugger";
+	} else if(mcpReady && debuggerStopped) {
+		status = "ready_debugger_stopped";
+	} else if(mcpReady && clockGated) {
+		status = "ready_paused";
+	} else if(mcpReady) {
+		status = "ready_running";
+	}
+
 	result << "{\"phase\":\"";
 
-	switch(_coreState.phase.load()) {
+	switch(phase) {
 		case EmuPhase::Idle:       result << "idle"; break;
 		case EmuPhase::LoadingRom: result << "loading"; break;
 		case EmuPhase::Running:    result << "running"; break;
 		case EmuPhase::Error:      result << "error"; break;
 	}
 
-	result << "\"";
+	result << "\",\"status\":\"" << status << "\""
+		<< ",\"console_loaded\":" << (consoleLoaded ? "true" : "false")
+		<< ",\"mcp_ready\":" << (mcpReady ? "true" : "false")
+		<< ",\"debugger_available\":" << (debuggerAvailable ? "true" : "false")
+		<< ",\"debugger_stopped\":";
+	if(debuggerAvailable) result << (debuggerStopped ? "true" : "false");
+	else result << "null";
+	const char* clockOwner = phase != EmuPhase::Running ? "none"
+		: (debuggerStopped ? "debugger" : (clockGated ? "mcp" : "emulator"));
+	result << ",\"clock_owner\":\"" << clockOwner << "\"";
 
 	// Add mode when running. Report "paused" if either the MCP clock gate is closed
 	// (!freeRunning) OR the debugger has broken — both cases mean emu is not advancing.
-	if(_coreState.phase == EmuPhase::Running) {
-		bool stopped = !_coreState.freeRunning;
-		if(!stopped) {
-			DebuggerRequest dbgReq = _emu->GetDebugger(false);
-			Debugger* d = dbgReq.GetDebugger();
-			if(d && d->IsExecutionStopped()) stopped = true;
-		}
+	if(phase == EmuPhase::Running) {
+		bool stopped = clockGated || debuggerStopped;
 		result << ",\"mode\":\"" << (stopped ? "paused" : "free") << "\"";
+	} else {
+		result << ",\"mode\":\"unavailable\"";
 	}
 
-	// Add frame count and PC when running
-	if(_coreState.phase == EmuPhase::Running && _emu->IsRunning()) {
+	// Always emit frame_count and pc with stable types so clients never need to
+	// infer readiness from a field being absent.
+	if(consoleLoaded) {
 		result << ",\"frame_count\":" << _emu->GetFrameCount();
-
-		DebuggerRequest dbgRequest = _emu->GetDebugger(true);
-		Debugger* dbg = dbgRequest.GetDebugger();
 		if(dbg) {
 			ConsoleType ct = _emu->GetConsoleType();
 			CpuType cpuType = GetMainCpuType(ct);
 			uint32_t pc = dbg->GetProgramCounter(cpuType, false);
 			result << ",\"pc\":" << pc;
+		} else result << ",\"pc\":null";
+	} else result << ",\"frame_count\":0,\"pc\":null";
 
-			// debugger_stopped = true if debugger broke.
-			result << ",\"debugger_stopped\":" << (dbg->IsExecutionStopped() ? "true" : "false");
-		}
-	}
+	if(phase == EmuPhase::Error) result << ",\"error\":\"rom_load_failed\"";
 
 	result << "}";
 	return OkResponse(cmd.id, result.str());
@@ -1286,8 +1441,9 @@ std::string McpServer::ExecGetTrace(McpTypedCommand& cmd)
 			memset(opts.Format, 0, sizeof(opts.Format));
 			// Minimal format: just the disassembly. PC + cycle come from
 			// TraceRow.ProgramCounter and ByteCode separately.
-			const char* fmt = "[Disassembly]";
-			strncpy(opts.Format, fmt, sizeof(opts.Format) - 1);
+			static constexpr char fmt[] = "[Disassembly]";
+			static_assert(sizeof(fmt) <= sizeof(opts.Format), "trace format buffer too small");
+			memcpy(opts.Format, fmt, sizeof(fmt));
 			logger->SetOptions(opts);
 			_coreState.traceEnabled = true;
 		}
@@ -1607,15 +1763,18 @@ std::string McpServer::ExecGetWriteLog(McpTypedCommand& cmd)
 
 	std::vector<McpWriteLogEntry> entries;
 	bool overflow = false;
-	McpWriteLog::Instance().Drain(entries, (size_t)maxN, clear, overflow);
+	uint64_t dropped = 0;
+	McpWriteLog::Instance().Drain(entries, (size_t)maxN, clear, overflow, dropped);
 
 	std::ostringstream r;
 	r << "{\"count\":" << entries.size()
 	  << ",\"overflow\":" << (overflow ? "true" : "false")
+	  << ",\"dropped\":" << dropped
 	  << ",\"entries\":[";
 	for(size_t i = 0; i < entries.size(); i++) {
 		if(i > 0) r << ",";
 		r << "{\"cycle\":" << entries[i].Cycle
+		  << ",\"frame\":" << entries[i].Frame
 		  << ",\"pc\":" << entries[i].Pc
 		  << ",\"addr\":" << entries[i].Addr
 		  << ",\"value\":" << (int)entries[i].Value
@@ -1633,6 +1792,25 @@ std::string McpServer::ExecGetWriteLog(McpTypedCommand& cmd)
 
 bool McpServer::SetInput(BaseControlDevice* device)
 {
+	{
+		std::lock_guard<std::mutex> lock(_coreState.inputSequenceMutex);
+		if(_coreState.inputSequenceEnabled && device->GetPort() == (uint8_t)_coreState.inputSequencePort) {
+			uint32_t frame = _emu->GetFrameCount();
+			if(frame != _coreState.inputSequenceLastFrame) {
+				if(_coreState.inputSequenceIndex >= _coreState.inputSequence.size()) {
+					_coreState.inputSequenceEnabled = false;
+					return false;
+				}
+				_coreState.inputSequenceCurrentButtons = _coreState.inputSequence[_coreState.inputSequenceIndex++];
+				_coreState.inputSequenceLastFrame = frame;
+			}
+			ControlDeviceState state;
+			state.State.push_back(_coreState.inputSequenceCurrentButtons);
+			device->SetRawState(state);
+			device->RefreshStateBuffer();
+			return true;
+		}
+	}
 	if(_coreState.stickyInputPort < 0) return false;
 	if(device->GetPort() != (uint8_t)_coreState.stickyInputPort) return false;
 

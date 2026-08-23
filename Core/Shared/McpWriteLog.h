@@ -8,6 +8,7 @@
 struct McpWriteLogEntry
 {
 	uint64_t Cycle;
+	uint32_t Frame;
 	uint16_t Pc;
 	uint16_t Addr;
 	uint8_t Value;
@@ -30,11 +31,11 @@ public:
 		return addr >= s && addr <= e;
 	}
 
-	void Record(uint64_t cycle, uint16_t pc, uint16_t addr, uint8_t value, int32_t prgPc, int32_t prgAddr);
+	void Record(uint64_t cycle, uint32_t frame, uint16_t pc, uint16_t addr, uint8_t value, int32_t prgPc, int32_t prgAddr);
 
 	void Configure(uint16_t startAddr, uint16_t endAddr, bool enabled, size_t cap);
 
-	void Drain(std::vector<McpWriteLogEntry>& out, size_t maxEntries, bool clear, bool& overflowFlag);
+	void Drain(std::vector<McpWriteLogEntry>& out, size_t maxEntries, bool clear, bool& overflowFlag, uint64_t& dropped);
 
 	void Clear();
 
@@ -51,4 +52,5 @@ private:
 	std::vector<McpWriteLogEntry> _buffer;
 	size_t _cap = 65536;
 	bool _overflow = false;
+	std::atomic<uint64_t> _dropped{0};
 };

@@ -49,6 +49,8 @@ private:
 	NesConsole* _console = nullptr;
 	bool _enabled = false;
 	bool _deduplicate = false;
+	bool _graphDeduplicate = false;
+	uint32_t _eventMask = 0x3FF;
 	string _summaryPath;
 	string _outputBuffer;
 	ofstream _outputFile;
@@ -80,7 +82,8 @@ public:
 	NesControlFlowTracer(NesConsole* console);
 	~NesControlFlowTracer();
 
-	void Start(const string& filename, bool deduplicate = false, const string& summaryPath = "");
+	void Start(const string& filename, bool deduplicate = false, const string& summaryPath = "",
+		uint32_t eventMask = 0x3FF, bool graphDeduplicate = false);
 	void Stop();
 	__forceinline bool IsEnabled() const { return _enabled; }
 

@@ -45,7 +45,18 @@ enum class McpCommandType {
 	SetSpeed,
 	StartControlFlowTrace,
 	StopControlFlowTrace,
-	GetControlFlowTraceStats
+	GetControlFlowTraceStats,
+	WriteMemoryBlock,
+	SaveStateFile,
+	LoadStateFile,
+	GetNesRuntimeState,
+	QueueInputSequence,
+	ClearInputSequence,
+	GetInputSequenceStatus,
+	WaitForBreak,
+	StartOracleCapture,
+	StopOracleCapture,
+	GetOracleCaptureStatus
 };
 
 struct McpTypedCommand {
@@ -68,7 +79,10 @@ struct McpTypedCommand {
 	bool enabled = false;        // set_write_log: toggle / get_write_log: drain flag
 	int speed = 100;             // set_speed: 0=unlimited, 100=normal, up to 5000
 	bool deduplicate = false;    // start_control_flow_trace: online dedup
+	int eventMask = 0x3FF;
+	bool graphDeduplicate = false;
 	std::string summaryPath;     // start_control_flow_trace: where to write the dedup summary on Stop()
+	std::vector<int> values;     // block writes / frame-indexed input
 
 	// Response channel: core sets, TCP thread waits (hard 30s timeout)
 	std::string response;
@@ -111,6 +125,13 @@ struct McpCoreState {
 	bool traceEnabled = false;
 
 	std::mutex intentionMutex;
+	std::mutex inputSequenceMutex;
+	std::vector<uint8_t> inputSequence;
+	size_t inputSequenceIndex = 0;
+	uint32_t inputSequenceLastFrame = UINT32_MAX;
+	uint8_t inputSequenceCurrentButtons = 0;
+	int inputSequencePort = 0;
+	bool inputSequenceEnabled = false;
 };
 
 class McpServer : public IInputProvider {
@@ -135,6 +156,7 @@ private:
 	static std::string ExtractString(const std::string& json, const std::string& key);
 	static int ExtractInt(const std::string& json, const std::string& key, int defaultVal = 0);
 	static std::string ExtractJsonArray(const std::string& json, const std::string& key);
+	static std::vector<int> ExtractIntArray(const std::string& json, const std::string& key);
 
 	// Dual-path execution: direct on TCP thread when debugger is stopped
 	bool CanExecuteDirect(McpCommandType type);
@@ -143,6 +165,7 @@ private:
 	// Core thread only (emu thread queue path)
 	std::string ExecuteCommand(McpTypedCommand& cmd);
 	std::string ExecLoadRom(McpTypedCommand& cmd);
+	std::string ExecLoadRomDirect(McpTypedCommand& cmd);
 	std::string ExecStepFrame(McpTypedCommand& cmd);
 	std::string ExecReadMemory(McpTypedCommand& cmd);
 	std::string ExecWriteMemory(McpTypedCommand& cmd);
@@ -168,6 +191,17 @@ private:
 	std::string ExecStartControlFlowTrace(McpTypedCommand& cmd);
 	std::string ExecStopControlFlowTrace(McpTypedCommand& cmd);
 	std::string ExecGetControlFlowTraceStats(McpTypedCommand& cmd);
+	std::string ExecWriteMemoryBlock(McpTypedCommand& cmd);
+	std::string ExecSaveStateFile(McpTypedCommand& cmd);
+	std::string ExecLoadStateFile(McpTypedCommand& cmd);
+	std::string ExecGetNesRuntimeState(McpTypedCommand& cmd);
+	std::string ExecQueueInputSequence(McpTypedCommand& cmd);
+	std::string ExecClearInputSequence(McpTypedCommand& cmd);
+	std::string ExecGetInputSequenceStatus(McpTypedCommand& cmd);
+	std::string ExecWaitForBreak(McpTypedCommand& cmd);
+	std::string ExecStartOracleCapture(McpTypedCommand& cmd);
+	std::string ExecStopOracleCapture(McpTypedCommand& cmd);
+	std::string ExecGetOracleCaptureStatus(McpTypedCommand& cmd);
 
 	static std::string OkResponse(int id, const std::string& resultJson);
 	static std::string ErrorResponse(int id, const std::string& error);

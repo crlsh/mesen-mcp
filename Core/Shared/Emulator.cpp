@@ -50,6 +50,8 @@
 #include "Shared/MemoryOperationType.h"
 #include "Shared/EventType.h"
 
+#include <cstdlib>
+
 Emulator::Emulator() :
 	_settings(new EmuSettings(this)),
 	_debugHud(new DebugHud()),
@@ -95,9 +97,28 @@ void Emulator::Initialize(bool enableShortcuts)
 	_videoDecoder->StartThread();
 	_videoRenderer->StartThread();
 
-	// Start MCP server (always-on, localhost:12345)
+	// Start MCP server (always-on, localhost:12345).  Tests may select an
+	// isolated port so a post-build run cannot collide with a user's Mesen.
 	if(!_mcpServer) {
-		_mcpServer.reset(new McpServer(this, 12345));
+		uint16_t mcpPort = 12345;
+		const char* value = nullptr;
+#ifdef _WIN32
+		char portBuffer[16] = {};
+		size_t portLength = 0;
+		if(getenv_s(&portLength, portBuffer, sizeof(portBuffer), "MESEN_MCP_PORT") == 0 && portLength > 0) {
+			value = portBuffer;
+		}
+#else
+		value = std::getenv("MESEN_MCP_PORT");
+#endif
+		if(value) {
+			char* end = nullptr;
+			long parsed = std::strtol(value, &end, 10);
+			if(end != value && *end == '\0' && parsed > 0 && parsed <= 65535) {
+				mcpPort = (uint16_t)parsed;
+			}
+		}
+		_mcpServer.reset(new McpServer(this, mcpPort));
 		_mcpServer->Start();
 	}
 }

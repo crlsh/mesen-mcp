@@ -606,6 +606,7 @@
     <ClInclude Include="Shared\Emulator.h" />
     <ClInclude Include="Shared\McpServer.h" />
     <ClInclude Include="Shared\McpWriteLog.h" />
+    <ClInclude Include="..\..\mesen-oracle\native\MesenOracleRecorder.h" />
     <ClInclude Include="Gameboy\Gameboy.h" />
     <ClInclude Include="Gameboy\Debugger\GameboyDisUtils.h" />
     <ClInclude Include="Gameboy\GameboyHeader.h" />
@@ -1010,7 +1011,9 @@
     <ClCompile Include="SNES\SnesDmaController.cpp" />
     <ClCompile Include="Shared\Emulator.cpp" />
     <ClCompile Include="Shared\McpServer.cpp" />
+	<ClCompile Include="Shared\McpOracleApi.cpp" />
     <ClCompile Include="Shared\McpWriteLog.cpp" />
+    <ClCompile Include="..\..\mesen-oracle\native\MesenOracleRecorder.cpp" />
     <ClCompile Include="Gameboy\Gameboy.cpp" />
     <ClCompile Include="Gameboy\Debugger\GameboyDisUtils.cpp" />
     <ClCompile Include="Gameboy\APU\GbApu.cpp" />

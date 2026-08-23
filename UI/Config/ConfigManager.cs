@@ -174,6 +174,12 @@ namespace Mesen.Config
 			_homeFolder = null;
 		}
 
+		internal static void UseTestRunnerHomeFolder(string folder)
+		{
+			_homeFolder = folder;
+			Directory.CreateDirectory(_homeFolder);
+		}
+
 		public static string HomeFolder {
 			get
 			{

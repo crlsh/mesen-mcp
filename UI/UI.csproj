@@ -661,4 +661,9 @@
     <Exec Command="cp ./Assets/MesenIcon.icns $(OutDir)&#xD;&#xA;cd $(OutDir)&#xD;&#xA;rm -R Dependencies&#xD;&#xA;mkdir Dependencies&#xD;&#xA;cp -R $(ProjectDir)/Dependencies/* Dependencies&#xD;&#xA;cp libHarfBuzzSharp.dylib Dependencies&#xD;&#xA;cp libSkiaSharp.dylib Dependencies&#xD;&#xA;cp MesenCore.dylib Dependencies&#xD;&#xA;cd Dependencies&#xD;&#xA;rm ../Dependencies.zip&#xD;&#xA;zip -r ../Dependencies.zip *&#xD;&#xA;cp ../Dependencies.zip $(ProjectDir)" />
   </Target>
 
+	<Target Name="McpPostBuildTests" AfterTargets="Build"
+		Condition="'$(RuntimeIdentifier)'=='win-x64' And '$(DesignTimeBuild)'!='true' And '$(RunMcpPostBuildTests)'!='false'">
+		<Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(SolutionDir)..\post-build-tests\Run-PostBuildTests.ps1&quot; -MesenExe &quot;$(OutDir)Mesen.exe&quot;" />
+	</Target>
+
 </Project>

@@ -70,7 +70,8 @@ NesControlFlowTracer::~NesControlFlowTracer()
 	Stop();
 }
 
-void NesControlFlowTracer::Start(const string& filename, bool deduplicate, const string& summaryPath)
+void NesControlFlowTracer::Start(const string& filename, bool deduplicate, const string& summaryPath,
+	uint32_t eventMask, bool graphDeduplicate)
 {
 	if(_enabled) {
 		return;
@@ -81,6 +82,8 @@ void NesControlFlowTracer::Start(const string& filename, bool deduplicate, const
 	_enabled = _outputFile.is_open();
 	_mapperStateId = 0;
 	_deduplicate = deduplicate;
+	_graphDeduplicate = graphDeduplicate;
+	_eventMask = eventMask;
 	_summaryPath = summaryPath;
 	_seen.clear();
 	_eventsSeen = 0;
@@ -146,7 +149,7 @@ bool NesControlFlowTracer::MaybeRecord(uint8_t type, uint32_t a, uint32_t b)
 {
 	BaseNesPpu* ppu = _console->GetPpu();
 	uint32_t frame = ppu ? ppu->GetFrameCount() : 0;
-	DedupKey k{ type, a, b, _mapperStateId };
+	DedupKey k{ type, a, b, (_graphDeduplicate && type != 9) ? 0 : _mapperStateId };
 	auto it = _seen.find(k);
 	if(it == _seen.end()) {
 		DedupEntry e;
@@ -165,12 +168,13 @@ bool NesControlFlowTracer::MaybeRecord(uint8_t type, uint32_t a, uint32_t b)
 
 void NesControlFlowTracer::EmitOrDedupLine(string& line, uint8_t type, uint32_t a, uint32_t b)
 {
+	if(type >= 32 || (_eventMask & (1u << type)) == 0) return;
 	_eventsSeen++;
 	if(_deduplicate) {
 		bool isNew = MaybeRecord(type, a, b);
 		if(isNew) {
 			//Stash a copy of the JSON line in the dedup entry for the summary.
-			DedupKey k{ type, a, b, _mapperStateId };
+			DedupKey k{ type, a, b, (_graphDeduplicate && type != 9) ? 0 : _mapperStateId };
 			_seen[k].firstLineJson = line;
 			EmitLine(line);
 		}
