@@ -153,16 +153,36 @@ std::string McpServer::OkResponse(int id, const std::string& resultJson)
 	return "{\"ok\":true,\"result\":" + resultJson + ",\"id\":" + std::to_string(id) + "}";
 }
 
+static std::string EscapeJsonString(const std::string& value)
+{
+	static constexpr char hex[] = "0123456789abcdef";
+	std::string escaped;
+	escaped.reserve(value.size());
+	for(unsigned char c : value) {
+		switch(c) {
+			case '"': escaped += "\\\""; break;
+			case '\\': escaped += "\\\\"; break;
+			case '\b': escaped += "\\b"; break;
+			case '\f': escaped += "\\f"; break;
+			case '\n': escaped += "\\n"; break;
+			case '\r': escaped += "\\r"; break;
+			case '\t': escaped += "\\t"; break;
+			default:
+				if(c < 0x20) {
+					escaped += "\\u00";
+					escaped += hex[c >> 4];
+					escaped += hex[c & 0x0F];
+				} else {
+					escaped += (char)c;
+				}
+		}
+	}
+	return escaped;
+}
+
 std::string McpServer::ErrorResponse(int id, const std::string& error)
 {
-	// Escape quotes in error message
-	std::string escaped;
-	for(char c : error) {
-		if(c == '"') escaped += "\\\"";
-		else if(c == '\\') escaped += "\\\\";
-		else escaped += c;
-	}
-	return "{\"ok\":false,\"error\":\"" + escaped + "\",\"id\":" + std::to_string(id) + "}";
+	return "{\"ok\":false,\"error\":\"" + EscapeJsonString(error) + "\",\"id\":" + std::to_string(id) + "}";
 }
 
 // ============================================================================
@@ -950,9 +970,9 @@ std::string McpServer::ExecStartControlFlowTrace(McpTypedCommand& cmd)
 	}
 	nes->StartControlFlowTrace(cmd.path, cmd.deduplicate, cmd.summaryPath,
 		(uint32_t)cmd.eventMask, cmd.graphDeduplicate);
-	std::string result = "{\"accepted\":true,\"path\":\"" + cmd.path + "\"";
+	std::string result = "{\"accepted\":true,\"path\":\"" + EscapeJsonString(cmd.path) + "\"";
 	if(cmd.deduplicate) {
-		result += ",\"deduplicate\":true,\"summary_path\":\"" + cmd.summaryPath + "\"";
+		result += ",\"deduplicate\":true,\"summary_path\":\"" + EscapeJsonString(cmd.summaryPath) + "\"";
 	}
 	result += "}";
 	return OkResponse(cmd.id, result);
