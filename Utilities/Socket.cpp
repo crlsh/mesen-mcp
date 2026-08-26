@@ -217,37 +217,40 @@ bool WouldBlock(int nError)
 int Socket::Send(char *buf, int len, int flags)
 {
 	int retryCount = 100;
-	int nError = 0;
-	int returnVal;
-	do {
-		//Loop until everything has been sent (shouldn't loop at all in the vast majority of cases)
-		returnVal = send(_socket, buf, len, flags);
+	int totalSent = 0;
+	while(len > 0) {
+		// A successful send may still be partial, especially for large MCP
+		// framebuffer responses. Keep going until the entire buffer is sent.
+		int returnVal = send(_socket, buf, len, flags);
 
 		if(returnVal > 0) {
-			//Sent partial data, adjust pointer & length
 			buf += returnVal;
 			len -= returnVal;
+			totalSent += returnVal;
+			retryCount = 100;
 		} else if(returnVal == SOCKET_ERROR) {
-			nError = WSAGetLastError();
-			if(nError != 0) {
-				if(!WouldBlock(nError)) {
-					SetConnectionErrorFlag();
-				} else {
-					retryCount--;
-					if(retryCount == 0) {
-						//Connection seems dead, close it.
-						std::cout << "Unable to send data, closing socket." << std::endl;
-						Close();
-						return 0;
-					}
-					
-					std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(20));
+			int nError = WSAGetLastError();
+			if(!WouldBlock(nError)) {
+				SetConnectionErrorFlag();
+				return returnVal;
+			} else {
+				retryCount--;
+				if(retryCount == 0) {
+					//Connection seems dead, close it.
+					std::cout << "Unable to send data, closing socket." << std::endl;
+					Close();
+					return 0;
 				}
+
+				std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(20));
 			}
+		} else {
+			SetConnectionErrorFlag();
+			return totalSent;
 		}
-	} while(WouldBlock(nError) && len > 0);
+	}
 		
-	return returnVal;
+	return totalSent;
 }
 
 int Socket::Recv(char *buf, int len, int flags)

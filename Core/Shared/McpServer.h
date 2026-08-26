@@ -57,7 +57,8 @@ enum class McpCommandType {
 	WaitForBreak,
 	StartOracleCapture,
 	StopOracleCapture,
-	GetOracleCaptureStatus
+	GetOracleCaptureStatus,
+	GetFramebuffer
 };
 
 struct McpTypedCommand {
@@ -82,6 +83,7 @@ struct McpTypedCommand {
 	bool deduplicate = false;    // start_control_flow_trace: online dedup
 	int eventMask = 0x3FF;
 	bool graphDeduplicate = false;
+	bool includeFramebufferHash = false;
 	std::string summaryPath;     // start_control_flow_trace: where to write the dedup summary on Stop()
 	std::vector<int> values;     // block writes / frame-indexed input
 
@@ -201,6 +203,7 @@ private:
 	std::string ExecStartOracleCapture(McpTypedCommand& cmd);
 	std::string ExecStopOracleCapture(McpTypedCommand& cmd);
 	std::string ExecGetOracleCaptureStatus(McpTypedCommand& cmd);
+	std::string ExecGetFramebuffer(McpTypedCommand& cmd);
 
 	static std::string OkResponse(int id, const std::string& resultJson);
 	static std::string ErrorResponse(int id, const std::string& error);

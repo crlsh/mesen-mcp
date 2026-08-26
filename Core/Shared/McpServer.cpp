@@ -21,6 +21,7 @@
 #include "Shared/McpWriteLog.h"
 #include "NES/NesTypes.h"
 #include "NES/NesConsole.h"
+#include "NES/BaseNesPpu.h"
 #include "NES/Debugger/NesControlFlowTracer.h"
 #include "NES/NesMemoryManager.h"
 #include "Utilities/Socket.h"
@@ -406,10 +407,13 @@ std::shared_ptr<McpTypedCommand> McpServer::ParseCommand(const std::string& json
 		cmd->address = ExtractInt(json, "entry_prg", -1);
 		cmd->value = ExtractInt(json, "end_prg", -1);
 		cmd->count = ExtractInt(json, "max_rows", 0);
+		cmd->includeFramebufferHash = ExtractInt(json, "include_framebuffer_hash", 0) != 0;
 	} else if(method == "stop_oracle_capture") {
 		cmd->type = McpCommandType::StopOracleCapture;
 	} else if(method == "get_oracle_capture_status") {
 		cmd->type = McpCommandType::GetOracleCaptureStatus;
+	} else if(method == "get_framebuffer") {
+		cmd->type = McpCommandType::GetFramebuffer;
 	} else {
 		return nullptr;
 	}
@@ -479,6 +483,7 @@ std::string McpServer::ExecuteCommandDirect(McpTypedCommand& cmd)
 		case McpCommandType::StartOracleCapture: return ExecStartOracleCapture(cmd);
 		case McpCommandType::StopOracleCapture: return ExecStopOracleCapture(cmd);
 		case McpCommandType::GetOracleCaptureStatus: return ExecGetOracleCaptureStatus(cmd);
+		case McpCommandType::GetFramebuffer: return ExecGetFramebuffer(cmd);
 		default: return ErrorResponse(cmd.id, "command not supported in direct mode");
 	}
 }
@@ -694,6 +699,7 @@ std::string McpServer::ExecuteCommand(McpTypedCommand& cmd)
 		case McpCommandType::StartOracleCapture: return ExecStartOracleCapture(cmd);
 		case McpCommandType::StopOracleCapture: return ExecStopOracleCapture(cmd);
 		case McpCommandType::GetOracleCaptureStatus: return ExecGetOracleCaptureStatus(cmd);
+		case McpCommandType::GetFramebuffer: return ExecGetFramebuffer(cmd);
 		default: return ErrorResponse(cmd.id, "unknown command type");
 	}
 }
@@ -907,6 +913,10 @@ std::string McpServer::ExecReset(McpTypedCommand& cmd)
 	{
 		std::lock_guard<std::mutex> lock(_coreState.intentionMutex);
 		_coreState.pendingReset = true;
+	}
+	IConsole* console = _emu->GetConsoleUnsafe();
+	if(console && console->GetConsoleType() == ConsoleType::Nes) {
+		static_cast<NesConsole*>(console)->GetPpu()->InvalidateLastCompletedFrame();
 	}
 
 	// Return immediately - reset executes in emu thread

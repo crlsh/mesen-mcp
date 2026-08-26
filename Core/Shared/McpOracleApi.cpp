@@ -38,7 +38,7 @@ std::string McpServer::ExecStartOracleCapture(McpTypedCommand& cmd)
 	if(cmd.address < 0 || cmd.value < 0) return ErrorResponse(cmd.id, "entry_prg and end_prg are required");
 	std::string error;
 	if(!MesenOracleRecorder::Instance().Start(cmd.path, (uint32_t)cmd.address, (uint32_t)cmd.value,
-		cmd.count > 0 ? (uint32_t)cmd.count : 0, error)) return ErrorResponse(cmd.id, error);
+		cmd.count > 0 ? (uint32_t)cmd.count : 0, cmd.includeFramebufferHash, error)) return ErrorResponse(cmd.id, error);
 	return OkResponse(cmd.id, R"({"started":true})");
 }
 
@@ -47,15 +47,18 @@ std::string McpServer::ExecStopOracleCapture(McpTypedCommand& cmd)
 	MesenOracleRecorder& recorder = MesenOracleRecorder::Instance();
 	uint64_t rows = recorder.RowCount();
 	uint64_t entries = recorder.EntryCount();
+	uint64_t framebufferMisses = recorder.FramebufferMissCount();
 	recorder.Stop();
-	return OkResponse(cmd.id, "{\"stopped\":true,\"rows\":" + std::to_string(rows) + ",\"entries\":" + std::to_string(entries) + "}");
+	return OkResponse(cmd.id, "{\"stopped\":true,\"rows\":" + std::to_string(rows) + ",\"entries\":" + std::to_string(entries)
+		+ ",\"framebufferMisses\":" + std::to_string(framebufferMisses) + "}");
 }
 
 std::string McpServer::ExecGetOracleCaptureStatus(McpTypedCommand& cmd)
 {
 	MesenOracleRecorder& recorder = MesenOracleRecorder::Instance();
 	return OkResponse(cmd.id, std::string("{\"enabled\":") + (recorder.IsEnabled() ? "true" : "false")
-		+ ",\"rows\":" + std::to_string(recorder.RowCount()) + ",\"entries\":" + std::to_string(recorder.EntryCount()) + "}");
+		+ ",\"rows\":" + std::to_string(recorder.RowCount()) + ",\"entries\":" + std::to_string(recorder.EntryCount())
+		+ ",\"framebufferMisses\":" + std::to_string(recorder.FramebufferMissCount()) + "}");
 }
 
 std::string McpServer::ExecWriteMemoryBlock(McpTypedCommand& cmd)

@@ -78,6 +78,7 @@ template<class T> NesPpu<T>::NesPpu(NesConsole* console)
 template<class T> void NesPpu<T>::Reset(bool softReset)
 {
 	_masterClock = 0;
+	InvalidateLastCompletedFrame();
 
 	//Reset OAM decay timestamps regardless of the reset PPU option
 	memset(_oamDecayCycles, 0, sizeof(_oamDecayCycles));
@@ -1178,6 +1179,8 @@ template<class T> void NesPpu<T>::DebugCopyOutputBuffer(uint16_t *target)
 template<class T> void NesPpu<T>::SendFrame()
 {
 	UpdateGrayscaleAndIntensifyBits();
+	_lastCompletedOutputBuffer = _currentOutputBuffer;
+	_lastCompletedFrameCount = _frameCount;
 
 	_emu->ProcessEvent(EventType::EndFrame);
 
@@ -1572,6 +1575,7 @@ template<class T> void NesPpu<T>::Serialize(Serializer& s)
 	}
 
 	if(!s.IsSaving()) {
+		InvalidateLastCompletedFrame();
 		UpdateTimings(_region);
 		UpdateMinimumDrawCycles();
 		UpdateGrayscaleAndIntensifyBits();

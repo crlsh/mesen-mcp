@@ -93,6 +93,8 @@ protected:
 	Emulator* _emu = nullptr;
 	EmuSettings* _settings = nullptr;
 	uint16_t* _outputBuffers[2] = {};
+	uint16_t* _lastCompletedOutputBuffer = nullptr;
+	uint32_t _lastCompletedFrameCount = 0;
 
 	ConsoleRegion _region = {};
 	uint16_t _standardVblankEnd = 0;
@@ -131,6 +133,17 @@ public:
 	uint32_t GetFrameCycle() { return ((_scanline + 1) * 341) + _cycle; }
 
 	virtual uint16_t* GetScreenBuffer(bool previousBuffer, bool processGrayscaleEmphasisBits = false) = 0;
+	bool GetLastCompletedFrame(const uint16_t*& buffer, uint32_t& frameCount)
+	{
+		buffer = _lastCompletedOutputBuffer;
+		frameCount = _lastCompletedFrameCount;
+		return buffer != nullptr;
+	}
+	void InvalidateLastCompletedFrame()
+	{
+		_lastCompletedOutputBuffer = nullptr;
+		_lastCompletedFrameCount = 0;
+	}
 	virtual void UpdateTimings(ConsoleRegion region, bool overclockAllowed = true) = 0;
 
 	void GetState(NesPpuState& state);
