@@ -442,15 +442,24 @@
 	<ClCompile Include="Shared\McpOracleApi.cpp">
 	  <Filter>Shared</Filter>
 	</ClCompile>
+	<ClCompile Include="Shared\McpFramebuffer.cpp"><Filter>Shared</Filter></ClCompile>
+	<ClCompile Include="Shared\McpFramebufferApi.cpp"><Filter>Shared</Filter></ClCompile>
+	<ClCompile Include="Shared\McpFramebufferRecorder.cpp"><Filter>Shared</Filter></ClCompile>
+	<ClCompile Include="Shared\McpFramebufferRecorderTests.cpp"><Filter>Shared</Filter></ClCompile>
+	<ClCompile Include="Shared\McpFm2Input.cpp"><Filter>Shared</Filter></ClCompile>
+	<ClCompile Include="Shared\McpFm2InputTests.cpp"><Filter>Shared</Filter></ClCompile>
     <ClCompile Include="Shared\McpWriteLog.cpp">
       <Filter>Shared</Filter>
     </ClCompile>
     <ClInclude Include="Shared\Emulator.h">
       <Filter>Shared</Filter>
     </ClInclude>
-    <ClInclude Include="Shared\McpServer.h">
-      <Filter>Shared</Filter>
-    </ClInclude>
+	<ClInclude Include="Shared\McpServer.h">
+	  <Filter>Shared</Filter>
+	</ClInclude>
+	<ClInclude Include="Shared\McpFramebuffer.h"><Filter>Shared</Filter></ClInclude>
+	<ClInclude Include="Shared\McpFramebufferRecorder.h"><Filter>Shared</Filter></ClInclude>
+	<ClInclude Include="Shared\McpFm2Input.h"><Filter>Shared</Filter></ClInclude>
     <ClInclude Include="Shared\McpWriteLog.h">
       <Filter>Shared</Filter>
     </ClInclude>

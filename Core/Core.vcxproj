@@ -607,6 +607,8 @@
 	<ClInclude Include="Shared\McpServer.h" />
 	<ClInclude Include="Shared\McpExecutionController.h" />
 	<ClInclude Include="Shared\McpFramebuffer.h" />
+	<ClInclude Include="Shared\McpFramebufferRecorder.h" />
+	<ClInclude Include="Shared\McpFm2Input.h" />
     <ClInclude Include="Shared\McpWriteLog.h" />
     <ClInclude Include="..\..\mesen-oracle\native\MesenOracleRecorder.h" />
     <ClInclude Include="Gameboy\Gameboy.h" />
@@ -1017,6 +1019,10 @@
 	<ClCompile Include="Shared\McpExecutionControllerTests.cpp" />
 	<ClCompile Include="Shared\McpFramebuffer.cpp" />
 	<ClCompile Include="Shared\McpFramebufferApi.cpp" />
+	<ClCompile Include="Shared\McpFramebufferRecorder.cpp" />
+	<ClCompile Include="Shared\McpFramebufferRecorderTests.cpp" />
+	<ClCompile Include="Shared\McpFm2Input.cpp" />
+	<ClCompile Include="Shared\McpFm2InputTests.cpp" />
 	<ClCompile Include="Shared\McpOracleApi.cpp" />
     <ClCompile Include="Shared\McpWriteLog.cpp" />
     <ClCompile Include="..\..\mesen-oracle\native\MesenOracleRecorder.cpp" />

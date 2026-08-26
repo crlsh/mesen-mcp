@@ -1,6 +1,9 @@
 #include "pch.h"
 #include "Shared/McpExecutionController.h"
 
+namespace McpFm2InputTests { uint32_t RunAll(); }
+namespace McpFramebufferRecorderTests { uint32_t RunAll(); }
+
 namespace McpExecutionControllerTests {
 
 static uint32_t _failures = 0;
@@ -90,7 +93,7 @@ uint32_t RunAll()
 	TestPauseKindsAreExclusive();
 	TestDetachedDoesNotControlMesenClock();
 	TestQueueOwnershipAndOrder();
-	return _failures;
+	return _failures + McpFm2InputTests::RunAll() + McpFramebufferRecorderTests::RunAll();
 }
 
 }

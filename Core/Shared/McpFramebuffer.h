@@ -16,5 +16,6 @@ struct McpFramebufferSnapshot
 class McpFramebuffer
 {
 public:
+	static void CaptureNesPixels(const uint16_t* pixels, uint32_t frame, McpFramebufferSnapshot& snapshot);
 	static bool CaptureNes(Emulator* emu, McpFramebufferSnapshot& snapshot, std::string& error);
 };

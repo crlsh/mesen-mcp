@@ -393,7 +393,11 @@ std::shared_ptr<McpTypedCommand> McpServer::ParseCommand(const std::string& json
 	} else if(method == "queue_input_sequence") {
 		cmd->type = McpCommandType::QueueInputSequence;
 		cmd->port = ExtractInt(json, "port", 0);
+		std::string buttonsJson = ExtractJsonArray(json, "buttons");
+		cmd->buttonsSpecified = !buttonsJson.empty();
 		cmd->values = ExtractIntArray(json, "buttons");
+		cmd->fm2FileSpecified = json.find("\"fm2_file\"") != std::string::npos;
+		cmd->path = ExtractString(json, "fm2_file");
 	} else if(method == "clear_input_sequence") {
 		cmd->type = McpCommandType::ClearInputSequence;
 	} else if(method == "get_input_sequence_status") {
@@ -414,6 +418,13 @@ std::shared_ptr<McpTypedCommand> McpServer::ParseCommand(const std::string& json
 		cmd->type = McpCommandType::GetOracleCaptureStatus;
 	} else if(method == "get_framebuffer") {
 		cmd->type = McpCommandType::GetFramebuffer;
+	} else if(method == "start_framebuffer_capture") {
+		cmd->type = McpCommandType::StartFramebufferCapture;
+		cmd->path = ExtractString(json, "path");
+	} else if(method == "stop_framebuffer_capture") {
+		cmd->type = McpCommandType::StopFramebufferCapture;
+	} else if(method == "get_framebuffer_capture_status") {
+		cmd->type = McpCommandType::GetFramebufferCaptureStatus;
 	} else {
 		return nullptr;
 	}
@@ -484,6 +495,9 @@ std::string McpServer::ExecuteCommandDirect(McpTypedCommand& cmd)
 		case McpCommandType::StopOracleCapture: return ExecStopOracleCapture(cmd);
 		case McpCommandType::GetOracleCaptureStatus: return ExecGetOracleCaptureStatus(cmd);
 		case McpCommandType::GetFramebuffer: return ExecGetFramebuffer(cmd);
+		case McpCommandType::StartFramebufferCapture: return ExecStartFramebufferCapture(cmd);
+		case McpCommandType::StopFramebufferCapture: return ExecStopFramebufferCapture(cmd);
+		case McpCommandType::GetFramebufferCaptureStatus: return ExecGetFramebufferCaptureStatus(cmd);
 		default: return ErrorResponse(cmd.id, "command not supported in direct mode");
 	}
 }
@@ -700,6 +714,9 @@ std::string McpServer::ExecuteCommand(McpTypedCommand& cmd)
 		case McpCommandType::StopOracleCapture: return ExecStopOracleCapture(cmd);
 		case McpCommandType::GetOracleCaptureStatus: return ExecGetOracleCaptureStatus(cmd);
 		case McpCommandType::GetFramebuffer: return ExecGetFramebuffer(cmd);
+		case McpCommandType::StartFramebufferCapture: return ExecStartFramebufferCapture(cmd);
+		case McpCommandType::StopFramebufferCapture: return ExecStopFramebufferCapture(cmd);
+		case McpCommandType::GetFramebufferCaptureStatus: return ExecGetFramebufferCaptureStatus(cmd);
 		default: return ErrorResponse(cmd.id, "unknown command type");
 	}
 }

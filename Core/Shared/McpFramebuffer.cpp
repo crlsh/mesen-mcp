@@ -10,6 +10,22 @@
 #include <algorithm>
 #include <cctype>
 
+void McpFramebuffer::CaptureNesPixels(const uint16_t* pixels, uint32_t frame, McpFramebufferSnapshot& snapshot)
+{
+	snapshot = {};
+	snapshot.Frame = frame;
+	snapshot.Width = NesConstants::ScreenWidth;
+	snapshot.Height = NesConstants::ScreenHeight;
+	snapshot.Data.resize(NesConstants::ScreenPixelCount * sizeof(uint16_t));
+	for(size_t i = 0; i < NesConstants::ScreenPixelCount; i++) {
+		snapshot.Data[i * 2] = (uint8_t)(pixels[i] & 0xFF);
+		snapshot.Data[i * 2 + 1] = (uint8_t)(pixels[i] >> 8);
+	}
+	snapshot.Hash = GetMd5Sum(snapshot.Data.data(), snapshot.Data.size());
+	std::transform(snapshot.Hash.begin(), snapshot.Hash.end(), snapshot.Hash.begin(),
+		[](unsigned char c) { return (char)std::tolower(c); });
+}
+
 bool McpFramebuffer::CaptureNes(Emulator* emu, McpFramebufferSnapshot& snapshot, std::string& error)
 {
 	snapshot = {};
@@ -30,16 +46,6 @@ bool McpFramebuffer::CaptureNes(Emulator* emu, McpFramebufferSnapshot& snapshot,
 		return false;
 	}
 
-	snapshot.Frame = frame;
-	snapshot.Width = NesConstants::ScreenWidth;
-	snapshot.Height = NesConstants::ScreenHeight;
-	snapshot.Data.resize(NesConstants::ScreenPixelCount * sizeof(uint16_t));
-	for(size_t i = 0; i < NesConstants::ScreenPixelCount; i++) {
-		snapshot.Data[i * 2] = (uint8_t)(pixels[i] & 0xFF);
-		snapshot.Data[i * 2 + 1] = (uint8_t)(pixels[i] >> 8);
-	}
-	snapshot.Hash = GetMd5Sum(snapshot.Data.data(), snapshot.Data.size());
-	std::transform(snapshot.Hash.begin(), snapshot.Hash.end(), snapshot.Hash.begin(),
-		[](unsigned char c) { return (char)std::tolower(c); });
+	CaptureNesPixels(pixels, frame, snapshot);
 	return true;
 }

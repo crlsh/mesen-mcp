@@ -12,6 +12,7 @@
 #include "NES/NesConsole.h"
 #include "NES/BaseNesPpu.h"
 #include "NES/BaseMapper.h"
+#include "Shared/McpFm2Input.h"
 #include "../../../mesen-oracle/native/MesenOracleRecorder.h"
 
 #include <sstream>
@@ -149,15 +150,24 @@ std::string McpServer::ExecGetNesRuntimeState(McpTypedCommand& cmd)
 std::string McpServer::ExecQueueInputSequence(McpTypedCommand& cmd)
 {
 	if(cmd.port < 0 || cmd.port > 3) return ErrorResponse(cmd.id, "invalid port");
+	if(cmd.buttonsSpecified == cmd.fm2FileSpecified) return ErrorResponse(cmd.id, "exactly one of buttons or fm2_file is required");
+	std::string source = "buttons";
+	if(cmd.fm2FileSpecified) {
+		std::string error;
+		if(!McpFm2Input::Load(cmd.path, cmd.values, error)) return ErrorResponse(cmd.id, error);
+		source = "fm2_file";
+	}
 	if(cmd.values.empty()) return ErrorResponse(cmd.id, "buttons must not be empty");
-	std::lock_guard<std::mutex> lock(_coreState.inputSequenceMutex);
 	for(int value : cmd.values) {
 		if(value < 0 || value > 255) return ErrorResponse(cmd.id, "button values must be 0-255");
+	}
+	std::lock_guard<std::mutex> lock(_coreState.inputSequenceMutex);
+	for(int value : cmd.values) {
 		_coreState.inputSequence.push_back((uint8_t)value);
 	}
 	_coreState.inputSequencePort = cmd.port;
 	_coreState.inputSequenceEnabled = true;
-	return OkResponse(cmd.id, "{\"queued\":" + std::to_string(cmd.values.size()) + ",\"total\":" + std::to_string(_coreState.inputSequence.size()) + "}");
+	return OkResponse(cmd.id, "{\"queued\":" + std::to_string(cmd.values.size()) + ",\"total\":" + std::to_string(_coreState.inputSequence.size()) + ",\"source\":\"" + source + "\"}");
 }
 
 std::string McpServer::ExecClearInputSequence(McpTypedCommand& cmd)

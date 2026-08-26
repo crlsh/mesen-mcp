@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "Shared/McpFramebufferRecorder.h"
 
 #include "Utilities/Serializer.h"
 
@@ -1181,6 +1182,7 @@ template<class T> void NesPpu<T>::SendFrame()
 	UpdateGrayscaleAndIntensifyBits();
 	_lastCompletedOutputBuffer = _currentOutputBuffer;
 	_lastCompletedFrameCount = _frameCount;
+	McpFramebufferRecorder::Instance().Record(_frameCount, _currentOutputBuffer);
 
 	_emu->ProcessEvent(EventType::EndFrame);
 
