@@ -13,9 +13,6 @@ namespace Mesen.Windows
 		public MessageBox()
 		{
 			InitializeComponent();
-#if DEBUG
-			this.AttachDevTools();
-#endif
 		}
 
 		private void InitializeComponent()
@@ -34,7 +31,7 @@ namespace Mesen.Windows
 			MessageBox msgbox = new MessageBox() { Title = title };
 			outMsgbox = msgbox;
 			msgbox.GetControl<TextBlock>("Text").Text = text;
-			
+
 			switch(icon) {
 				case MessageBoxIcon.Error: msgbox.GetControl<Image>("imgError").IsVisible = true; break;
 				case MessageBoxIcon.Warning: msgbox.GetControl<Image>("imgWarning").IsVisible = true; break;

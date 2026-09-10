@@ -70,8 +70,7 @@ uint8_t GbaControlManager::ReadController(uint32_t addr)
 				//TODOGBA other bits are 0 or 1?
 				return (
 					(controller->IsPressed(GbaController::R) ? 0 : (1 << 0)) |
-					(controller->IsPressed(GbaController::L) ? 0 : (1 << 1))
-				);
+					(controller->IsPressed(GbaController::L) ? 0 : (1 << 1)));
 			} else {
 				return (
 					(controller->IsPressed(GbaController::A) ? 0 : (1 << 0)) |
@@ -81,8 +80,7 @@ uint8_t GbaControlManager::ReadController(uint32_t addr)
 					(controller->IsPressed(GbaController::Right) ? 0 : (1 << 4)) |
 					(controller->IsPressed(GbaController::Left) ? 0 : (1 << 5)) |
 					(controller->IsPressed(GbaController::Up) ? 0 : (1 << 6)) |
-					(controller->IsPressed(GbaController::Down) ? 0 : (1 << 7))
-				);
+					(controller->IsPressed(GbaController::Down) ? 0 : (1 << 7)));
 			}
 		}
 	}
@@ -94,9 +92,9 @@ uint8_t GbaControlManager::ReadInputPort(uint32_t addr)
 {
 	if(addr & 0x02) {
 		if(addr & 0x01) {
-			return BitUtilities::GetBits<0>(_state.KeyControl);
-		} else {
 			return BitUtilities::GetBits<8>(_state.KeyControl);
+		} else {
+			return BitUtilities::GetBits<0>(_state.KeyControl);
 		}
 	} else {
 		SetInputReadFlag();

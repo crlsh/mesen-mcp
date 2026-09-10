@@ -37,7 +37,8 @@ namespace Mesen.Debugger.Views
 			InitializeComponent();
 
 			_viewer = this.GetControl<DisassemblyViewer>("disViewer");
-			_viewer.GetPropertyChangedObservable(DisassemblyViewer.VisibleRowCountProperty).Subscribe(x => {
+
+			AddDisposable(_viewer.ObserveProp(DisassemblyViewer.VisibleRowCountProperty, x => {
 				int rowCount = _viewer.VisibleRowCount;
 				int prevCount = Model.VisibleRowCount;
 				if(prevCount != rowCount) {
@@ -46,7 +47,7 @@ namespace Mesen.Debugger.Views
 						Model.Refresh();
 					}
 				}
-			});
+			}));
 
 			InitContextMenu();
 		}
@@ -414,7 +415,7 @@ namespace Mesen.Debugger.Views
 				_parentModel = parentModel;
 				_parentModel.Selected += Parent_Selected;
 			}
-			
+
 			_model?.SetViewer(_viewer);
 			FocusViewer();
 		}

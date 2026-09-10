@@ -1,7 +1,9 @@
 ﻿using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input.Platform;
 using Avalonia.Media;
 using Avalonia.Threading;
+using CommunityToolkit.Mvvm.ComponentModel;
 using Mesen.Config;
 using Mesen.Debugger.Controls;
 using Mesen.Debugger.Disassembly;
@@ -11,8 +13,6 @@ using Mesen.Interop;
 using Mesen.Localization;
 using Mesen.Utilities;
 using Mesen.ViewModels;
-using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -22,40 +22,40 @@ using System.Threading.Tasks;
 
 namespace Mesen.Debugger.ViewModels
 {
-	public class TraceLoggerViewModel : DisposableViewModel, ISelectableModel
+	public partial class TraceLoggerViewModel : DisposableViewModel, ISelectableModel
 	{
 		public TraceLoggerConfig Config { get; }
-		[Reactive] public TraceLoggerStyleProvider StyleProvider { get; set; }
-		[Reactive] public CodeLineData[] TraceLogLines { get; set; } = Array.Empty<CodeLineData>();
-		[Reactive] public int VisibleRowCount { get; set; } = 100;
-		[Reactive] public int ScrollPosition { get; set; } = 0;
-		[Reactive] public int MinScrollPosition { get; set; } = 0;
-		[Reactive] public int MaxScrollPosition { get; set; } = DebugApi.TraceLogBufferSize;
-		[Reactive] public bool IsLoggingToFile { get; set; } = false;
+		[ObservableProperty] public partial TraceLoggerStyleProvider StyleProvider { get; set; }
+		[ObservableProperty] public partial CodeLineData[] TraceLogLines { get; set; } = Array.Empty<CodeLineData>();
+		[ObservableProperty] public partial int VisibleRowCount { get; set; } = 100;
+		[ObservableProperty] public partial int ScrollPosition { get; set; } = 0;
+		[ObservableProperty] public partial int MinScrollPosition { get; set; } = 0;
+		[ObservableProperty] public partial int MaxScrollPosition { get; set; } = DebugApi.TraceLogBufferSize;
+		[ObservableProperty] public partial bool IsLoggingToFile { get; set; } = false;
 
-		[Reactive] public List<TraceLoggerOptionTab> Tabs { get; set; } = new();
-		[Reactive] public TraceLoggerOptionTab SelectedTab { get; set; } = null!;
+		[ObservableProperty] public partial List<TraceLoggerOptionTab> Tabs { get; set; } = new();
+		[ObservableProperty] public partial TraceLoggerOptionTab SelectedTab { get; set; } = null!;
 
-		[Reactive] public string? TraceFile { get; set; } = null;
-		[Reactive] public bool AllowOpenTraceFile { get; private set; } = false;
-		[Reactive] public bool IsStartLoggingEnabled { get; set; }
-		
-		[Reactive] public bool ShowByteCode { get; private set; }
+		[ObservableProperty] public partial string? TraceFile { get; set; } = null;
+		[ObservableProperty] public partial bool AllowOpenTraceFile { get; private set; } = false;
+		[ObservableProperty] public partial bool IsStartLoggingEnabled { get; set; }
 
-		[Reactive] public int SelectionStart { get; private set; }
-		[Reactive] public int SelectionEnd { get; private set; }
-		[Reactive] public int SelectionAnchor { get; private set; }
-		[Reactive] public int SelectedRow { get; private set; }
+		[ObservableProperty] public partial bool ShowByteCode { get; private set; }
 
-		[Reactive] public List<ContextMenuAction> ToolbarItems { get; private set; } = new();
+		[ObservableProperty] public partial int SelectionStart { get; private set; }
+		[ObservableProperty] public partial int SelectionEnd { get; private set; }
+		[ObservableProperty] public partial int SelectionAnchor { get; private set; }
+		[ObservableProperty] public partial int SelectedRow { get; private set; }
 
-		[Reactive] public List<ContextMenuAction> FileMenuItems { get; private set; } = new();
-		[Reactive] public List<ContextMenuAction> DebugMenuItems { get; private set; } = new();
-		[Reactive] public List<ContextMenuAction> SearchMenuItems { get; private set; } = new();
-		[Reactive] public List<ContextMenuAction> ViewMenuItems { get; private set; } = new();
+		[ObservableProperty] public partial List<ContextMenuAction> ToolbarItems { get; private set; } = new();
+
+		[ObservableProperty] public partial List<ContextMenuAction> FileMenuItems { get; private set; } = new();
+		[ObservableProperty] public partial List<ContextMenuAction> DebugMenuItems { get; private set; } = new();
+		[ObservableProperty] public partial List<ContextMenuAction> SearchMenuItems { get; private set; } = new();
+		[ObservableProperty] public partial List<ContextMenuAction> ViewMenuItems { get; private set; } = new();
 
 		public QuickSearchViewModel QuickSearch { get; } = new();
-		
+
 		private DisassemblyViewer? _viewer = null;
 
 		public TraceLoggerViewModel()
@@ -71,7 +71,7 @@ namespace Mesen.Debugger.ViewModels
 
 			QuickSearch.OnFind += QuickSearch_OnFind;
 
-			AddDisposable(this.WhenAnyValue(x => x.QuickSearch.IsSearchBoxVisible).Subscribe(x => {
+			AddDisposable(QuickSearch.ObserveProp(nameof(QuickSearch.IsSearchBoxVisible), () => {
 				if(!QuickSearch.IsSearchBoxVisible) {
 					_viewer?.Focus();
 				}
@@ -79,29 +79,28 @@ namespace Mesen.Debugger.ViewModels
 
 			UpdateAvailableTabs();
 
-			AddDisposable(this.WhenAnyValue(x => x.ScrollPosition).Subscribe(x => {
-				ScrollPosition = Math.Max(MinScrollPosition, Math.Min(x, MaxScrollPosition));
+			AddDisposable(this.ObserveProp(nameof(ScrollPosition), () => {
+				UpdateScrollPosition();
 				UpdateLog();
 			}));
+			AddDisposable(this.ObserveProp(nameof(MinScrollPosition), UpdateScrollPosition));
+			AddDisposable(this.ObserveProp(nameof(MaxScrollPosition), UpdateScrollPosition));
 
-			AddDisposable(this.WhenAnyValue(x => x.MinScrollPosition).Subscribe(x => {
-				ScrollPosition = Math.Max(MinScrollPosition, Math.Min(x, MaxScrollPosition));
-			}));
-
-			AddDisposable(this.WhenAnyValue(x => x.MaxScrollPosition).Subscribe(x => {
-				ScrollPosition = Math.Max(MinScrollPosition, Math.Min(x, MaxScrollPosition));
-			}));
-
-			AddDisposable(this.WhenAnyValue(x => x.IsLoggingToFile).Subscribe(x => {
+			AddDisposable(this.ObserveProp(nameof(IsLoggingToFile), () => {
 				AllowOpenTraceFile = !IsLoggingToFile && TraceFile != null;
 			}));
 
-			AddDisposable(this.WhenAnyValue(x => x.SelectionStart, x => x.SelectionEnd, x => x.SelectedRow, x => x.SelectionAnchor).Subscribe(x => {
+			AddDisposable(this.ObserveProp([nameof(SelectionStart), nameof(SelectionEnd), nameof(SelectedRow), nameof(SelectionAnchor)], () => {
 				SelectionStart = Math.Max(MinScrollPosition, Math.Min(DebugApi.TraceLogBufferSize - 1, SelectionStart));
 				SelectionEnd = Math.Max(MinScrollPosition, Math.Min(DebugApi.TraceLogBufferSize - 1, SelectionEnd));
 				SelectedRow = Math.Max(MinScrollPosition, Math.Min(DebugApi.TraceLogBufferSize - 1, SelectedRow));
 				SelectionAnchor = Math.Max(MinScrollPosition, Math.Min(DebugApi.TraceLogBufferSize - 1, SelectionAnchor));
 			}));
+		}
+
+		private void UpdateScrollPosition()
+		{
+			ScrollPosition = Math.Max(MinScrollPosition, Math.Min(ScrollPosition, MaxScrollPosition));
 		}
 
 		public void SetViewer(DisassemblyViewer viewer)
@@ -113,7 +112,7 @@ namespace Mesen.Debugger.ViewModels
 		{
 			CodeLineData[] lines = GetCodeLines(0, DebugApi.TraceLogBufferSize);
 			string needle = e.SearchString.ToLowerInvariant();
-			
+
 			int startRow = SelectedRow;
 			if(e.Direction == SearchDirection.Backward) {
 				startRow--;
@@ -445,7 +444,7 @@ namespace Mesen.Debugger.ViewModels
 		}
 	}
 
-	public class TraceLoggerOptionTab : DisposableViewModel
+	public partial class TraceLoggerOptionTab : DisposableViewModel
 	{
 		public string TabName { get; set; } = "";
 		public Control HelpTooltip => ExpressionTooltipHelper.GetHelpTooltip(CpuType, false);
@@ -459,8 +458,8 @@ namespace Mesen.Debugger.ViewModels
 		public bool ShowIndentCode { get; }
 		public TraceLoggerCpuConfig Options { get; }
 
-		[Reactive] public string Format { get; set; } = "";
-		[Reactive] public bool IsConditionValid { get; set; } = true;
+		[ObservableProperty] public partial string Format { get; set; } = "";
+		[ObservableProperty] public partial bool IsConditionValid { get; set; } = true;
 
 		private TraceLoggerViewModel _traceLogger;
 
@@ -469,7 +468,7 @@ namespace Mesen.Debugger.ViewModels
 			_traceLogger = traceLogger;
 			CpuType = cpuType;
 			Options = options;
-			
+
 			ShowEnableButton = showEnableButton;
 			ShowStatusFormat = cpuType != CpuType.Cx4 && cpuType != CpuType.NecDsp;
 			ShowIndentCode = cpuType != CpuType.Gsu;
@@ -673,7 +672,7 @@ namespace Mesen.Debugger.ViewModels
 				CpuType.Nes => new string[] { "A", "X", "Y", "P", "SP" },
 				CpuType.Pce => new string[] { "A", "X", "Y", "P", "SP" },
 				CpuType.Sms => new string[] { "A", "B", "C", "D", "E", "F", "H", "L", "IX", "IY", "A'", "B'", "C'", "D'", "E'", "F'", "H'", "L'", "I", "R", "PS", "SP" },
-				CpuType.Gba or CpuType.St018  => new string[] { "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10", "R11", "R12", "R13", "R14", "R15", "CPSR" },
+				CpuType.Gba or CpuType.St018 => new string[] { "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10", "R11", "R12", "R13", "R14", "R15", "CPSR" },
 				CpuType.Ws => new string[] { "AX", "BX", "CX", "DX", "CS", "IP", "SS", "SP", "BP", "DS", "ES", "SI", "DI", "F" },
 				_ => throw new Exception("unsupported cpu type")
 			};
@@ -717,7 +716,7 @@ namespace Mesen.Debugger.ViewModels
 		}
 
 		public int AddressSize { get; private set; } = 6;
-		public int ByteCodeSize { get; private set; } = 4;
+		public int ByteCodeStringLength { get; private set; } = 4;
 		private LineProperties GetMainCpuStyle() { return new LineProperties() { AddressColor = null, LineBgColor = null }; }
 		private LineProperties GetSecondaryCpuStyle() { return new LineProperties() { AddressColor = Color.FromRgb(30, 145, 30), LineBgColor = Color.FromRgb(230, 245, 230) }; }
 		private LineProperties GetCoprocessorStyle() { return new LineProperties() { AddressColor = Color.FromRgb(30, 30, 145), LineBgColor = Color.FromRgb(230, 230, 245) }; }
@@ -749,8 +748,7 @@ namespace Mesen.Debugger.ViewModels
 		{
 			_consoleType = consoleType;
 			AddressSize = consoleType.GetMainCpuType().GetAddressSize();
-			ByteCodeSize = consoleType.GetMainCpuType().GetByteCodeSize();
+			ByteCodeStringLength = consoleType.GetMainCpuType().GetByteCodeStringLength();
 		}
 	}
-
 }

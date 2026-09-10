@@ -2,9 +2,9 @@
 
 #include "pch.h"
 #include "Utilities/ISerializable.h"
-#include "Utilities/FastString.h"
 #include "Utilities/magic_enum.hpp"
 #include "Utilities/safe_ptr.h"
+#include "Utilities/StringUtilities.h"
 
 class Serializer;
 
@@ -80,7 +80,9 @@ private:
 	unordered_map<string, SerializeValue> _values;
 
 	//Used by Lua API
-	unordered_map<string, SerializeMapValue> _mapValues;
+	unordered_map<string, SerializeMapValue> _mapLoadValues;
+	vector<string> _mapSaveKeys;
+	vector<SerializeMapValue> _mapSaveValues;
 
 	uint32_t _version = 0;
 	bool _saving = false;
@@ -95,12 +97,17 @@ private:
 	string GetKey(const char* name, int index)
 	{
 		string valName = NormalizeName(name, index);
+#ifdef _DEBUG
 		if(valName.empty()) {
 			throw std::runtime_error("invalid value name");
 		}
-		return _prefix + valName;
+#endif
+		if(_prefix.size()) {
+			return _prefix + valName;
+		} else {
+			return valName;
+		}
 	}
-
 	template<typename T>
 	void WriteValue(T value)
 	{
@@ -124,24 +131,39 @@ private:
 	}
 
 	template<typename T>
+	void ReadValue(T& value, uint8_t* src, int size)
+	{
+		uint8_t* ptr = (uint8_t*)&value;
+		constexpr bool isBigEndian = false;
+		constexpr int mask = isBigEndian ? size - 1 : 0;
+		for(int i = 0; i < size; i++) {
+			ptr[i ^ mask] = src[i];
+		}
+	}
+
+	template<typename T>
 	void WriteMapFormat(string& key, T& value)
 	{
 		if constexpr(std::is_same<T, bool>::value) {
-			_mapValues.try_emplace(key, SerializeMapValueFormat::Bool, (bool)value);
+			_mapSaveKeys.push_back(key);
+			_mapSaveValues.push_back({ SerializeMapValueFormat::Bool, (bool)value });
 		} else if constexpr(std::is_integral<T>::value) {
-			_mapValues.try_emplace(key, SerializeMapValueFormat::Integer, (int64_t)value);
+			_mapSaveKeys.push_back(key);
+			_mapSaveValues.push_back({ SerializeMapValueFormat::Integer, (int64_t)value });
 		} else if constexpr(std::is_floating_point<T>::value) {
-			_mapValues.try_emplace(key, SerializeMapValueFormat::Double, (double)value);
+			_mapSaveKeys.push_back(key);
+			_mapSaveValues.push_back({ SerializeMapValueFormat::Double, (double)value });
 		} else if constexpr(std::is_same<T, string>::value) {
-			_mapValues.try_emplace(key, value);
+			_mapSaveKeys.push_back(key);
+			_mapSaveValues.push_back({ (string)value });
 		}
 	}
 
 	template<typename T>
 	void ReadMapFormat(string& key, T& value)
 	{
-		auto result = _mapValues.find(key);
-		if(result != _mapValues.end()) {
+		auto result = _mapLoadValues.find(key);
+		if(result != _mapLoadValues.end()) {
 			SerializeMapValue mapVal = result->second;
 			if constexpr(std::is_same<T, bool>::value) {
 				if(mapVal.Format == SerializeMapValueFormat::Bool) {
@@ -206,7 +228,7 @@ private:
 
 	__forceinline void CheckDuplicateKey(string& key)
 	{
-#ifdef DEBUG
+#ifdef _DEBUG
 		if(!_usedKeys.emplace(key).second) {
 			throw std::runtime_error("Duplicate key");
 		}
@@ -218,22 +240,44 @@ public:
 
 	uint32_t GetVersion() { return _version; }
 	bool IsSaving() { return _saving; }
-	
+
 	SerializeFormat GetFormat() { return _format; }
-	unordered_map<string, SerializeMapValue>& GetMapValues() { return _mapValues; }
+	vector<string>& GetMapKeys() { return _mapSaveKeys; }
+	vector<SerializeMapValue>& GetMapValues() { return _mapSaveValues; }
 
 	void SetErrorFlag() { _hasError = true; }
 	bool HasError() { return _hasError; }
+
+	void Reset()
+	{
+		_data.clear();
+		_prefixes.clear();
+		_prefix.clear();
+
+		_usedKeys.clear();
+		_values.clear();
+		_mapLoadValues.clear();
+		_mapSaveKeys.clear();
+		_mapSaveValues.clear();
+		_hasError = false;
+	}
 
 	bool IsValid() { return _values.size() > 0; }
 	void AddKeyPrefix(string prefix);
 	void RemoveKeyPrefix(string prefix);
 	void RemoveKeys(vector<string>& keys);
 
-	template <class T> struct is_unique_ptr : std::false_type {};
-	template <class T, class D> struct is_unique_ptr<std::unique_ptr<T, D>> : std::true_type {};
-	template <class T> struct is_shared_ptr : std::false_type {};
-	template <class T> struct is_shared_ptr<std::shared_ptr<T>> : std::true_type {};
+	template<class T> struct is_unique_ptr : std::false_type
+	{};
+
+	template<class T, class D> struct is_unique_ptr<std::unique_ptr<T, D>> : std::true_type
+	{};
+
+	template<class T> struct is_shared_ptr : std::false_type
+	{};
+
+	template<class T> struct is_shared_ptr<std::shared_ptr<T>> : std::true_type
+	{};
 
 	template<typename T> void Stream(T& value, const char* name, int index = -1)
 	{
@@ -242,7 +286,7 @@ public:
 		static_assert(!std::is_pointer<T>::value, "[Serializer] Unexpected pointer");
 		static_assert(!std::is_class<T>::value || std::is_base_of<ISerializable, T>::value, "[Serializer] Object does not implement ISerializable");
 		static_assert(std::is_arithmetic<T>::value || std::is_enum<T>::value || std::is_base_of<ISerializable, T>::value, "[Serializer] Invalid value type");
-		
+
 		if constexpr(std::is_base_of<ISerializable, T>::value) {
 			Stream((ISerializable&)value, name, index);
 		} else {
@@ -275,6 +319,11 @@ public:
 							SerializeValue& savedValue = result->second;
 							if(savedValue.Size >= sizeof(T)) {
 								ReadValue(value, savedValue.DataPtr);
+							} else if(savedValue.Size > 0) {
+								//If the saved value is a smaller size than the current value, set the value to 0 and load the available data
+								//This is for backward-compatibility (can happen when a value is changed from e.g uint8_t to uint16_t, etc.)
+								memset(&value, 0, sizeof(T));
+								ReadValue(value, savedValue.DataPtr, savedValue.Size);
 							} else {
 								//TODO review this - is it better to keep the state as-is if the data can't be found?
 								//Setting to 0 can break compatibility with old save states - maybe keeping the current state is safer?
@@ -450,9 +499,19 @@ public:
 		return _values.find(key) != _values.end();
 	}
 
+	bool ContainsPrefix(const char* name)
+	{
+		for(auto& key : _values) {
+			if(StringUtilities::StartsWith(key.first, name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	void PushNamePrefix(const char* name, int index = -1);
 	void PopNamePrefix();
-	void SaveTo(ostream &file, int compressionLevel = 1);
+	void SaveTo(ostream& file, int compressionLevel = 1);
 	bool LoadFrom(istream& file);
 	void LoadFromMap(unordered_map<string, SerializeMapValue>& map);
 };

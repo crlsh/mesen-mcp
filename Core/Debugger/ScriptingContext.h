@@ -52,6 +52,7 @@ private:
 	static void ExecutionCountHook(lua_State* lua);
 	void LuaOpenLibs(lua_State* L, bool allowIoOsAccess);
 	void ProcessLuaError();
+	string GetErrorMessage();
 
 protected:
 	string _scriptName;
@@ -85,7 +86,7 @@ public:
 
 	CpuType GetDefaultCpuType() { return _defaultCpuType; }
 	MemoryType GetDefaultMemType() { return _defaultMemType; }
-	
+
 	void RefreshMemoryCallbackFlags();
 
 	void RegisterMemoryCallback(CallbackType type, int startAddr, int endAddr, MemoryType memType, CpuType cpuType, int reference);

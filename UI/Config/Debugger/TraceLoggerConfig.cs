@@ -1,4 +1,10 @@
-﻿using System;
+﻿using Avalonia;
+using Avalonia.Media;
+using Mesen.Debugger;
+using Mesen.Interop;
+using Mesen.ViewModels;
+using CommunityToolkit.Mvvm.ComponentModel;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -6,34 +12,28 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Serialization;
-using Avalonia;
-using Avalonia.Media;
-using Mesen.Debugger;
-using Mesen.Interop;
-using Mesen.ViewModels;
-using ReactiveUI.Fody.Helpers;
 
 namespace Mesen.Config
 {
-	public class TraceLoggerConfig : BaseWindowConfig<TraceLoggerConfig>
+	public partial class TraceLoggerConfig : BaseWindowConfig<TraceLoggerConfig>
 	{
-		[Reactive] public bool AutoRefresh { get; set; } = true;
-		[Reactive] public bool RefreshOnBreakPause { get; set; } = true;
-		[Reactive] public bool ShowToolbar { get; set; } = true;
+		[ObservableProperty] public partial bool AutoRefresh { get; set; } = true;
+		[ObservableProperty] public partial bool RefreshOnBreakPause { get; set; } = true;
+		[ObservableProperty] public partial bool ShowToolbar { get; set; } = true;
 
-		[Reactive] public TraceLoggerCpuConfig SnesConfig { get; set; } = new();
-		[Reactive] public TraceLoggerCpuConfig SpcConfig { get; set; } = new();
-		[Reactive] public TraceLoggerCpuConfig NecDspConfig { get; set; } = new();
-		[Reactive] public TraceLoggerCpuConfig Sa1Config { get; set; } = new();
-		[Reactive] public TraceLoggerCpuConfig GsuConfig { get; set; } = new();
-		[Reactive] public TraceLoggerCpuConfig Cx4Config { get; set; } = new();
-		[Reactive] public TraceLoggerCpuConfig St018Config { get; set; } = new();
-		[Reactive] public TraceLoggerCpuConfig GbConfig { get; set; } = new();
-		[Reactive] public TraceLoggerCpuConfig NesConfig { get; set; } = new();
-		[Reactive] public TraceLoggerCpuConfig PceConfig { get; set; } = new();
-		[Reactive] public TraceLoggerCpuConfig SmsConfig { get; set; } = new();
-		[Reactive] public TraceLoggerCpuConfig GbaConfig { get; set; } = new();
-		[Reactive] public TraceLoggerCpuConfig WsConfig { get; set; } = new();
+		[ObservableProperty] public partial TraceLoggerCpuConfig SnesConfig { get; set; } = new();
+		[ObservableProperty] public partial TraceLoggerCpuConfig SpcConfig { get; set; } = new();
+		[ObservableProperty] public partial TraceLoggerCpuConfig NecDspConfig { get; set; } = new();
+		[ObservableProperty] public partial TraceLoggerCpuConfig Sa1Config { get; set; } = new();
+		[ObservableProperty] public partial TraceLoggerCpuConfig GsuConfig { get; set; } = new();
+		[ObservableProperty] public partial TraceLoggerCpuConfig Cx4Config { get; set; } = new();
+		[ObservableProperty] public partial TraceLoggerCpuConfig St018Config { get; set; } = new();
+		[ObservableProperty] public partial TraceLoggerCpuConfig GbConfig { get; set; } = new();
+		[ObservableProperty] public partial TraceLoggerCpuConfig NesConfig { get; set; } = new();
+		[ObservableProperty] public partial TraceLoggerCpuConfig PceConfig { get; set; } = new();
+		[ObservableProperty] public partial TraceLoggerCpuConfig SmsConfig { get; set; } = new();
+		[ObservableProperty] public partial TraceLoggerCpuConfig GbaConfig { get; set; } = new();
+		[ObservableProperty] public partial TraceLoggerCpuConfig WsConfig { get; set; } = new();
 
 		public TraceLoggerConfig()
 		{

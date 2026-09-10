@@ -1,69 +1,67 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Controls.Selection;
 using Avalonia.Threading;
+using CommunityToolkit.Mvvm.ComponentModel;
 using DataBoxControl;
-using DynamicData;
 using Mesen.Config;
 using Mesen.Debugger.Utilities;
 using Mesen.Interop;
 using Mesen.Localization;
 using Mesen.Utilities;
 using Mesen.ViewModels;
-using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
-using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
 namespace Mesen.Debugger.ViewModels;
 
-public class MemorySearchViewModel : DisposableViewModel
+public partial class MemorySearchViewModel : DisposableViewModel
 {
 	public MemorySearchConfig Config { get; }
 
-	[Reactive] public Enum[] AvailableMemoryTypes { get; set; } = Array.Empty<Enum>();
+	[ObservableProperty] public partial Enum[] AvailableMemoryTypes { get; set; } = Array.Empty<Enum>();
 
-	[Reactive] public MemoryType MemoryType { get; set; } = MemoryType.SnesMemory;
-	[Reactive] public MemorySearchFormat Format { get; set; } = MemorySearchFormat.Hex;
-	[Reactive] public MemorySearchValueSize ValueSize { get; set; } = MemorySearchValueSize.Byte;
+	[ObservableProperty] public partial MemoryType MemoryType { get; set; } = MemoryType.SnesMemory;
+	[ObservableProperty] public partial MemorySearchFormat Format { get; set; } = MemorySearchFormat.Hex;
+	[ObservableProperty] public partial MemorySearchValueSize ValueSize { get; set; } = MemorySearchValueSize.Byte;
 
-	[Reactive] public MemorySearchCompareTo CompareTo { get; set; } = MemorySearchCompareTo.PreviousRefreshValue;
-	[Reactive] public MemorySearchOperator Operator { get; set; } = MemorySearchOperator.Equal;
+	[ObservableProperty] public partial MemorySearchCompareTo CompareTo { get; set; } = MemorySearchCompareTo.PreviousSearchValue;
+	[ObservableProperty] public partial MemorySearchOperator Operator { get; set; } = MemorySearchOperator.Equal;
 
-	[Reactive] public MesenList<MemoryAddressViewModel> ListData { get; private set; } = new();
-	[Reactive] public SelectionModel<MemoryAddressViewModel> Selection { get; set; } = new();
-	[Reactive] public SortState SortState { get; set; } = new();
+	[ObservableProperty] public partial MesenList<MemoryAddressViewModel> ListData { get; private set; } = new();
+	[ObservableProperty] public partial SelectionModel<MemoryAddressViewModel> Selection { get; set; } = new();
+	[ObservableProperty] public partial SortState SortState { get; set; } = new();
 	public List<int> ColumnWidths { get; } = ConfigManager.Config.Debug.MemorySearch.ColumnWidths;
 
-	[Reactive] public int SpecificAddress { get; set; } = 0;
-	[Reactive] public int SpecificValue { get; set; } = 0;
+	[ObservableProperty] public partial int SpecificAddress { get; set; } = 0;
+	[ObservableProperty] public partial int SpecificValue { get; set; } = 0;
 
-	[Reactive] public bool IsValueHex { get; set; }
+	[ObservableProperty] public partial bool IsValueHex { get; set; }
 
-	[Reactive] public string MinValue { get; set; } = "";
-	[Reactive] public string MaxValue { get; set; } = "";
+	[ObservableProperty] public partial string MinValue { get; set; } = "";
+	[ObservableProperty] public partial string MaxValue { get; set; } = "";
 
-	[Reactive] public int MaxAddress { get; set; } = 0;
-	
-	[Reactive] public bool IsUndoEnabled { get; set; } = false;
-	[Reactive] public bool IsSpecificValueEnabled { get; set; } = false;
-	[Reactive] public bool IsSpecificAddressEnabled { get; set; } = false;
-	
+	[ObservableProperty] public partial int MaxAddress { get; set; } = 0;
+
+	[ObservableProperty] public partial bool IsUndoEnabled { get; set; } = false;
+	[ObservableProperty] public partial bool IsSpecificValueEnabled { get; set; } = false;
+	[ObservableProperty] public partial bool IsSpecificAddressEnabled { get; set; } = false;
+
 	public int[] AddressLookup => _addressLookup;
 	public byte[] MemoryState => _memoryState;
 	public byte[] PrevMemoryState => _prevMemoryState;
+	public byte[] LastSearchSnapshot => _lastSearchSnapshot;
 
 	private List<MemoryAddressViewModel> _innerData = new();
 
 	private int[] _addressLookup = Array.Empty<int>();
-	
+
 	private byte[] _lastSearchSnapshot = Array.Empty<byte>();
-	private HashSet<int> _hiddenAddresses = new();	
-	
+	private HashSet<int> _hiddenAddresses = new();
+
 	private List<SearchHistory> _undoHistory = new();
 
 	private byte[] _memoryState = Array.Empty<byte>();
@@ -82,11 +80,7 @@ public class MemorySearchViewModel : DisposableViewModel
 		OnGameLoaded();
 		SortState.SetColumnSort("Address", ListSortDirection.Ascending, false);
 
-		AddDisposable(this.WhenAnyValue(x => x.MemoryType).Subscribe(x => {
-			ResetSearch();
-		}));
-		
-		AddDisposable(this.WhenAnyValue(x => x.Operator, x => x.CompareTo, x => x.ValueSize, x => x.Format).Subscribe(x => {
+		AddDisposable(this.ObserveProp([nameof(Operator), nameof(CompareTo), nameof(ValueSize), nameof(Format)], () => {
 			IsSpecificValueEnabled = CompareTo == MemorySearchCompareTo.SpecificValue;
 			IsSpecificAddressEnabled = CompareTo == MemorySearchCompareTo.SpecificAddress;
 
@@ -111,9 +105,14 @@ public class MemorySearchViewModel : DisposableViewModel
 			RefreshList(true);
 		}));
 
-		AddDisposable(this.WhenAnyValue(x => x.SpecificValue, x => x.SpecificAddress).Subscribe(x => {
+		AddDisposable(this.ObserveProp([nameof(SpecificValue), nameof(SpecificAddress)], () => {
 			RefreshList(false);
 		}));
+	}
+
+	partial void OnMemoryTypeChanged(MemoryType value)
+	{
+		ResetSearch();
 	}
 
 	public void SortCommand()
@@ -254,7 +253,7 @@ public class MemorySearchViewModel : DisposableViewModel
 	public bool IsMatch(int address)
 	{
 		long value = GetValue(address, _memoryState);
-		
+
 		long compareValue = CompareTo switch {
 			MemorySearchCompareTo.PreviousSearchValue => GetValue(address, _lastSearchSnapshot),
 			MemorySearchCompareTo.PreviousRefreshValue => GetValue(address, _prevMemoryState),
@@ -290,6 +289,16 @@ public class MemorySearchViewModel : DisposableViewModel
 
 		UpdateAddressLookup();
 
+		_lastSearchSnapshot = DebugApi.GetMemoryState(MemoryType);
+		RefreshList(true);
+	}
+
+	public void UpdateValues()
+	{
+		//Add an "empty" filter that only updates the "last values" that the next filter will be based on
+		_undoHistory.Add(new SearchHistory(_hiddenAddresses, _lastSearchSnapshot));
+		IsUndoEnabled = true;
+		UpdateAddressLookup();
 		_lastSearchSnapshot = DebugApi.GetMemoryState(MemoryType);
 		RefreshList(true);
 	}
@@ -429,11 +438,13 @@ public class MemoryAddressViewModel : INotifyPropertyChanged
 		int address = _search.AddressLookup[_index];
 		_addressString = address.ToString("X4");
 
+		byte[] prevData = _search.CompareTo == MemorySearchCompareTo.PreviousRefreshValue ? _search.PrevMemoryState : _search.LastSearchSnapshot;
+
 		uint value = 0;
 		uint prevValue = 0;
 		for(int i = 0; i < (int)_search.ValueSize && address + i < _search.MemoryState.Length; i++) {
 			value |= (uint)_search.MemoryState[address + i] << (i * 8);
-			prevValue |= (uint)_search.PrevMemoryState[address + i] << (i * 8);
+			prevValue |= (address + i < prevData.Length) ? (uint)prevData[address + i] << (i * 8) : 0;
 		}
 
 		switch(_search.Format) {

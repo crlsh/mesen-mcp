@@ -23,7 +23,7 @@ private:
 	IDebugger* _cpuDebugger = nullptr;
 
 	unordered_map<int32_t, ProfiledFunction> _functions;
-	
+
 	deque<int32_t> _functionStack;
 	deque<StackFrameFlags> _stackFlags;
 	deque<uint64_t> _cycleCountStack;
@@ -31,6 +31,10 @@ private:
 	uint64_t _currentCycleCount = 0;
 	uint64_t _prevMasterClock = 0;
 	int32_t _currentFunction = -1;
+
+	uint64_t _prevUsageCycleCount = 0;
+	uint64_t _prevUsageHaltedCycles = 0;
+	uint32_t _prevCpuUsage = 0;
 
 	void InternalReset();
 	void UpdateCycles();
@@ -42,7 +46,13 @@ public:
 	void StackFunction(AddressInfo& addr, StackFrameFlags stackFlag);
 	void UnstackFunction();
 
+	void RecordSample(AddressInfo addr);
+
+	void UpdateCpuUsage();
+
 	void Reset();
 	void ResetState();
+
 	void GetProfilerData(ProfiledFunction* profilerData, uint32_t& functionCount);
+	uint32_t GetCpuUsage() { return _prevCpuUsage; }
 };

@@ -5,7 +5,6 @@
 #include "PCE/PceVdc.h"
 #include "PCE/PceVce.h"
 #include "PCE/PceVpc.h"
-#include "PCE/PceMemoryManager.h"
 #include "PCE/PceConstants.h"
 #include "Debugger/DebugTypes.h"
 #include "Debugger/Debugger.h"
@@ -14,7 +13,7 @@
 #include "Shared/Emulator.h"
 #include "Shared/EmuSettings.h"
 
-PceEventManager::PceEventManager(Debugger *debugger, PceConsole *console)
+PceEventManager::PceEventManager(Debugger* debugger, PceConsole* console)
 {
 	_debugger = debugger;
 	_emu = debugger->GetEmulator();
@@ -34,7 +33,7 @@ PceEventManager::~PceEventManager()
 	delete[] _ppuBuffer;
 }
 
-void PceEventManager::AddEvent(DebugEventType type, MemoryOperationInfo &operation, int32_t breakpointId)
+void PceEventManager::AddEvent(DebugEventType type, MemoryOperationInfo& operation, int32_t breakpointId)
 {
 	DebugEventInfo evt = {};
 	evt.Type = type;
@@ -48,10 +47,8 @@ void PceEventManager::AddEvent(DebugEventType type, MemoryOperationInfo &operati
 
 	if(operation.Type == MemoryOperationType::Write && (operation.Address & 0x1FFF) < 0x400) {
 		if(_console->IsSuperGrafx()) {
-			if((operation.Address & 0x1A) == 2) {
+			if((operation.Address & 0x1A) == 2 || (operation.Address & 0x1A) == 0x12) {
 				evt.RegisterId = _vdc->GetState().CurrentReg; //VDC reg
-			} else {
-				//TODOv2 - supergrafx VPC writes, not VDC
 			}
 		} else {
 			if((operation.Address & 0x03) >= 2) {
@@ -125,29 +122,64 @@ EventViewerCategoryCfg PceEventManager::GetEventConfig(DebugEventInfo& evt)
 
 			if(reg <= 0x3FF) {
 				if(isWrite) {
+					uint8_t mask = _console->IsSuperGrafx() ? 0x1F : 0x03;
+					uint8_t vdcReg = reg & mask;
+
+					if(vdcReg >= 0x08 && vdcReg <= 0x0E) {
+						return _config.VpcWrites;
+					}
+
+					bool isVdc2 = (vdcReg & 0x10);
+					if(_console->IsSuperGrafx() && ((_config.SuperGrafxFilter == PceEventViewerSgxFilter::Vdc2 && !isVdc2) || (_config.SuperGrafxFilter == PceEventViewerSgxFilter::Vdc1 && isVdc2))) {
+						return {};
+					}
+
+					if((vdcReg & ~0x14) == 0) {
+						return _config.VdcRegSelectWrites;
+					}
+
 					switch(evt.RegisterId) {
-						case -1: return _config.VdcRegSelectWrites;
 						case 0: return _config.VdcVramWrites;
 						case 1: return _config.VdcVramReads;
 						case 2: return _config.VdcVramWrites;
 						case 5: return _config.VdcControlWrites;
 						case 6: return _config.VdcRcrWrites;
-						
-						case 7: case 8:
+
+						case 7:
+						case 8:
 							return _config.VdcScrollWrites;
 
 						case 9: return _config.VdcMemoryWidthWrites;
-						
-						case 0xA: case 0xB: case 0xC: case 0xD: case 0xE:
+
+						case 0xA:
+						case 0xB:
+						case 0xC:
+						case 0xD:
+						case 0xE:
 							return _config.VdcHvConfigWrites;
 
-						case 0xF: case 0x10: case 0x11: case 0x12: case 0x13:
+						case 0xF:
+						case 0x10:
+						case 0x11:
+						case 0x12:
+						case 0x13:
 							return _config.VdcDmaWrites;
 					}
 				} else {
-					if((reg & 0x03) == 0) {
+					uint8_t mask = _console->IsSuperGrafx() ? 0x1F : 0x03;
+					uint8_t vdcReg = reg & mask;
+					if(vdcReg >= 0x08 && vdcReg <= 0x0E) {
+						return _config.VpcReads;
+					}
+
+					bool isVdc2 = (reg & 0x10);
+					if(_console->IsSuperGrafx() && ((_config.SuperGrafxFilter == PceEventViewerSgxFilter::Vdc2 && !isVdc2) || (_config.SuperGrafxFilter == PceEventViewerSgxFilter::Vdc1 && isVdc2))) {
+						return {};
+					}
+
+					if((vdcReg & ~0x14) == 0) {
 						return _config.VdcStatusReads;
-					} else if((reg & 0x03) >= 2) {
+					} else if((vdcReg & ~0x15) == 0x02) {
 						return _config.VdcVramReads;
 					}
 				}
@@ -169,7 +201,12 @@ EventViewerCategoryCfg PceEventManager::GetEventConfig(DebugEventInfo& evt)
 						case 8:
 							return isWrite ? _config.AdpcmWrites : _config.CdRomReads;
 
-						case 9: case 0xA: case 0xB: case 0xC: case 0xD: case 0xE:
+						case 9:
+						case 0xA:
+						case 0xB:
+						case 0xC:
+						case 0xD:
+						case 0xE:
 							return isWrite ? _config.AdpcmWrites : _config.AdpcmReads;
 
 						default:
@@ -198,14 +235,14 @@ uint32_t PceEventManager::TakeEventSnapshot(bool forAutoRefresh)
 	constexpr uint32_t size = PceConstants::MaxScreenWidth * PceConstants::ScreenHeight;
 	if(scanline < 14 || scanline >= 256) {
 		memcpy(_ppuBuffer, _vpc->GetScreenBuffer(), size * sizeof(uint16_t));
-		memcpy(_rowClockDividers, _vpc->GetScreenBuffer()+size, PceConstants::ScreenHeight * sizeof(uint16_t));
+		memcpy(_rowClockDividers, _vpc->GetScreenBuffer() + size, PceConstants::ScreenHeight * sizeof(uint16_t));
 	} else {
 		uint32_t scanlineOffset = (scanline - 14);
 		uint32_t offset = PceConstants::MaxScreenWidth * scanlineOffset;
 		memcpy(_ppuBuffer, _vpc->GetScreenBuffer(), offset * sizeof(uint16_t));
 		memcpy(_ppuBuffer + offset, _vpc->GetPreviousScreenBuffer() + offset, (size - offset) * sizeof(uint16_t));
-		
-		memcpy(_rowClockDividers, _vpc->GetScreenBuffer()+size, scanlineOffset * sizeof(uint16_t));
+
+		memcpy(_rowClockDividers, _vpc->GetScreenBuffer() + size, scanlineOffset * sizeof(uint16_t));
 		memcpy(_rowClockDividers + scanlineOffset, _vpc->GetPreviousScreenBuffer() + size + scanlineOffset, (PceConstants::ScreenHeight - scanlineOffset) * sizeof(uint16_t));
 	}
 
@@ -226,9 +263,9 @@ FrameInfo PceEventManager::GetDisplayBufferSize()
 	return size;
 }
 
-void PceEventManager::DrawScreen(uint32_t *buffer)
+void PceEventManager::DrawScreen(uint32_t* buffer)
 {
-	uint16_t *src = _ppuBuffer;
+	uint16_t* src = _ppuBuffer;
 	uint32_t* palette = _emu->GetSettings()->GetPcEngineConfig().Palette;
 
 	for(uint32_t y = 0, len = PceConstants::ScreenHeight * 2; y < len; y++) {
@@ -240,7 +277,7 @@ void PceEventManager::DrawScreen(uint32_t *buffer)
 
 		for(uint32_t x = 0; x < PceConstants::ClockPerScanline; x++) {
 			int srcOffset = (scanline * PceConstants::MaxScreenWidth) + (x / divider);
-			buffer[(y + 14*2) * PceConstants::ClockPerScanline + x] = palette[src[srcOffset] & 0x3FF];
+			buffer[(y + 14 * 2) * PceConstants::ClockPerScanline + x] = palette[src[srcOffset] & 0x3FF];
 		}
 	}
 }

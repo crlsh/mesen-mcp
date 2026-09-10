@@ -1,30 +1,31 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
-using Mesen.ViewModels;
+using Avalonia.VisualTree;
 using Mesen.Config;
+using Mesen.Controls;
+using Mesen.Debugger.Utilities;
+using Mesen.Debugger.Windows;
+using Mesen.Interop;
+using Mesen.Localization;
+using Mesen.Utilities;
+using Mesen.ViewModels;
+using Mesen.Views;
 using System;
-using System.Runtime.InteropServices;
-using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
-using Mesen.Utilities;
-using Mesen.Interop;
-using Mesen.Views;
-using Avalonia.Layout;
-using Mesen.Debugger.Utilities;
-using System.Threading;
-using Mesen.Debugger.Windows;
-using Avalonia.Input.Platform;
-using System.Collections.Generic;
-using Mesen.Controls;
-using Mesen.Localization;
-using System.Diagnostics;
-using Avalonia.VisualTree;
+using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Mesen.Windows
 {
@@ -42,7 +43,6 @@ namespace Mesen.Windows
 		private CommandLineHelper? _cmdLine;
 
 		private bool _testModeEnabled;
-		private bool _needResume = false;
 		private bool _needCloseValidation = true;
 		private bool _isClosing = false;
 
@@ -61,12 +61,15 @@ namespace Mesen.Windows
 		private WindowState _prevWindowState;
 
 		//Used to suppress key-repeat keyup events on Linux
-		private Dictionary<Key, IDisposable> _pendingKeyUpEvents = new();
+		private Dictionary<UInt16, IDisposable> _pendingKeyUpEvents = new();
 		private bool _isLinux = false;
 
 		private Stopwatch _stopWatch = Stopwatch.StartNew();
-		private Dictionary<Key, long> _keyPressedStamp = new();
+		private Dictionary<UInt16, long> _keyPressedStamp = new();
 		private bool _focusInMenu;
+		private bool _needRendererReset;
+
+		public Control Renderer => _usesSoftwareRenderer ? _softwareRenderer : _renderer;
 
 		static MainWindow()
 		{
@@ -76,7 +79,7 @@ namespace Mesen.Windows
 
 		public MainWindow()
 		{
-			_testModeEnabled = System.Diagnostics.Debugger.IsAttached;
+			_testModeEnabled = ConfigManager.Config.EnableTestMode || System.Diagnostics.Debugger.IsAttached;
 			_isLinux = OperatingSystem.IsLinux();
 			_usesSoftwareRenderer = ConfigManager.Config.Video.UseSoftwareRenderer || OperatingSystem.IsMacOS();
 
@@ -102,17 +105,33 @@ namespace Mesen.Windows
 			_rendererPanel = this.GetControl<Panel>("RendererPanel");
 			_rendererPanel.LayoutUpdated += RendererPanel_LayoutUpdated;
 
-			_renderer = this.GetControl<NativeRenderer>("Renderer");
+			ResetRenderer();
+
 			_softwareRenderer = this.GetControl<SoftwareRendererView>("SoftwareRenderer");
 			_audioPlayer = this.GetControl<ContentControl>("AudioPlayer");
 			_mainMenu = this.GetControl<MainMenuView>("MainMenu");
+			_mainMenu.MainMenu.Opened += MainMenu_Opened;
 			ConfigManager.Config.MainWindow.LoadWindowSettings(this);
 
 			Console.CancelKeyPress += Console_CancelKeyPress;
 
-#if DEBUG
-			this.AttachDevTools();
-#endif
+		}
+
+		[MemberNotNull(nameof(_renderer))]
+		private void ResetRenderer()
+		{
+			if(_renderer != null && !_needRendererReset) {
+				//Renderer needs to be reset when VRR mode is enabled, because DX11 does not allow switching
+				//back to the non-flip swapchain model on a window that had the flip model enabled once.
+				return;
+			}
+
+			ContentControl container = this.GetControl<ContentControl>("RendererContainer");
+			_renderer = new NativeRenderer();
+			_renderer.IsVisible = _model.IsNativeRendererVisible;
+			_model.Renderer = _renderer;
+			container.Content = _renderer;
+			_needRendererReset = false;
 		}
 
 		private static void InitGlobalShortcuts()
@@ -122,7 +141,7 @@ namespace Mesen.Windows
 			}
 
 			PlatformHotkeyConfiguration hotkeyConfig = Application.Current.PlatformSettings.HotkeyConfiguration;
-			List <KeyGesture> gestures = hotkeyConfig.OpenContextMenu;
+			List<KeyGesture> gestures = hotkeyConfig.OpenContextMenu;
 			for(int i = gestures.Count - 1; i >= 0; i--) {
 				if(gestures[i].Key == Key.F10 && gestures[i].KeyModifiers == KeyModifiers.Shift) {
 					//Disable Shift-F10 shortcut to open context menu - interferes with default shortcut for step back
@@ -196,7 +215,7 @@ namespace Mesen.Windows
 
 		private void OnDrop(object? sender, DragEventArgs e)
 		{
-			string? filename = e.Data.GetFiles()?.FirstOrDefault()?.Path.LocalPath;
+			string? filename = e.DataTransfer.TryGetFiles()?.FirstOrDefault()?.Path.LocalPath;
 			if(filename != null) {
 				if(File.Exists(filename)) {
 					LoadRomHelper.LoadFile(filename);
@@ -215,14 +234,14 @@ namespace Mesen.Windows
 				return;
 			}
 
-			_mouseManager = new MouseManager(this, _usesSoftwareRenderer ? _softwareRenderer : _renderer, _mainMenu, _usesSoftwareRenderer);
+			_mouseManager = new MouseManager(this, _mainMenu, _usesSoftwareRenderer);
 
 			ConfigManager.Config.InitializeFontDefaults();
 			ConfigManager.Config.Preferences.ApplyFontOptions();
 			ConfigManager.Config.Debug.Fonts.ApplyConfig();
 
 			_timerBackgroundFlag.Interval = TimeSpan.FromMilliseconds(100);
-			_timerBackgroundFlag.Tick += timerUpdateBackgroundFlag;
+			_timerBackgroundFlag.Tick += TimerUpdateBackgroundFlag;
 			_timerBackgroundFlag.Start();
 
 			//Give focus to panel to avoid menu being given focus by default
@@ -247,7 +266,7 @@ namespace Mesen.Windows
 				);
 
 				ConfigManager.Config.RemoveObsoleteConfig();
-				
+
 				//InitializeDefaults must be after InitializeEmu, otherwise keybindings will be empty
 				ConfigManager.Config.InitializeDefaults();
 				ConfigManager.Config.UpgradeConfig();
@@ -301,10 +320,10 @@ namespace Mesen.Windows
 				case ConsoleNotificationType.GameLoaded:
 					CheatCodes.ApplyCheats();
 					RomInfo romInfo = EmuApi.GetRomInfo();
-					
+
 					Dispatcher.UIThread.Post(() => {
 						bool wasAudioFile = _model.AudioPlayer != null;
-						bool updateConfig = _model.RomInfo.Format != romInfo.Format;
+						bool updateConfig = _model.RomInfo.Format != romInfo.Format || _model.RomInfo.ConsoleType != romInfo.ConsoleType;
 						_model.RomInfo = romInfo;
 
 						if(updateConfig) {
@@ -433,6 +452,13 @@ namespace Mesen.Windows
 					SoftwareRendererFrame frame = Marshal.PtrToStructure<SoftwareRendererFrame>(e.Parameter);
 					_softwareRenderer.UpdateSoftwareRenderer(frame);
 					break;
+
+				case ConsoleNotificationType.NetplayStopped:
+					Dispatcher.UIThread.Post(() => {
+						//Re-apply user config (netplay might temporarily modify options to match host server's options)
+						ConfigManager.Config.ApplyConfig();
+					});
+					break;
 			}
 		}
 
@@ -533,7 +559,7 @@ namespace Mesen.Windows
 				height = width / aspectRatio;
 			}
 
-			if(ConfigManager.Config.Video.FullscreenForceIntegerScale && VisualRoot is Window wnd && (wnd.WindowState == WindowState.FullScreen || wnd.WindowState == WindowState.Maximized)) {
+			if(ConfigManager.Config.Video.FullscreenForceIntegerScale && (WindowState == WindowState.FullScreen || WindowState == WindowState.Maximized)) {
 				FrameInfo baseSize = EmuApi.GetBaseScreenSize();
 				double scale = height * dpiScale / baseSize.Height;
 				if(scale != Math.Floor(scale)) {
@@ -547,8 +573,21 @@ namespace Mesen.Windows
 			EmuApi.SetRendererSize(realWidth, realHeight);
 			_model.RendererSize = new Size(realWidth, realHeight);
 
-			_renderer.Width = width;
-			_renderer.Height = height;
+			if(WindowState == WindowState.FullScreen && !ConfigManager.Config.Video.UseExclusiveFullscreen && ConfigManager.Config.Video.EnableVariableRefreshRate) {
+				//When VRR is enabled, set the renderer to the same size as the monitor when in fullscreen mode
+				PixelRect bounds = ApplicationHelper.GetMainWindow()?.Screens.Primary?.Bounds ?? default;
+				if(bounds != default) {
+					_rendererSize = bounds.Size.ToSize(LayoutHelper.GetLayoutScale(this));
+					if(_model.IsMenuVisible) {
+						_rendererSize = _rendererSize.WithHeight(_rendererSize.Height - _mainMenu.Bounds.Height);
+					}
+					_renderer.Width = _rendererSize.Width;
+					_renderer.Height = _rendererSize.Height;
+				}
+			} else {
+				_renderer.Width = width;
+				_renderer.Height = height;
+			}
 			_model.SoftwareRenderer.Width = width;
 			_model.SoftwareRenderer.Height = height;
 		}
@@ -559,6 +598,16 @@ namespace Mesen.Windows
 			ResizeRenderer();
 		}
 
+		private void SetFullscreenMode(FullscreenMode mode, IntPtr windowHandle)
+		{
+			EmuApi.SetFullscreenMode(new FullscreenSettings() {
+				Mode = mode,
+				WindowHandle = windowHandle,
+				Width = ConfigManager.Config.Video.GetFullscreenWidth(),
+				Height = ConfigManager.Config.Video.GetFullscreenHeight()
+			});
+		}
+
 		public void ToggleFullscreen()
 		{
 			if(_preventFullscreenToggle) {
@@ -567,10 +616,10 @@ namespace Mesen.Windows
 
 			_preventFullscreenToggle = true;
 			if(WindowState == WindowState.FullScreen) {
+				ResetRenderer();
+
 				Task.Run(() => {
-					if(ConfigManager.Config.Video.UseExclusiveFullscreen) {
-						EmuApi.SetExclusiveFullscreenMode(false, _renderer.Handle);
-					}
+					SetFullscreenMode(FullscreenMode.Disabled, _renderer.Handle);
 
 					Dispatcher.UIThread.Post(() => {
 						WindowState = _prevWindowState;
@@ -595,7 +644,7 @@ namespace Mesen.Windows
 					}
 
 					Task.Run(() => {
-						EmuApi.SetExclusiveFullscreenMode(true, TryGetPlatformHandle()?.Handle ?? IntPtr.Zero);
+						SetFullscreenMode(FullscreenMode.Exclusive, TryGetPlatformHandle()?.Handle ?? IntPtr.Zero);
 						_preventFullscreenToggle = false;
 
 						Dispatcher.UIThread.Post(() => {
@@ -603,13 +652,19 @@ namespace Mesen.Windows
 						});
 					});
 				} else {
-					WindowState = WindowState.FullScreen;
-					_preventFullscreenToggle = false;
+					Dispatcher.UIThread.Post(() => {
+						if(ConfigManager.Config.Video.EnableVariableRefreshRate) {
+							_needRendererReset = OperatingSystem.IsWindows();
+							SetFullscreenMode(FullscreenMode.Borderless, _renderer.Handle);
+						}
+						WindowState = WindowState.FullScreen;
+						_preventFullscreenToggle = false;
+					});
 				}
 			}
 		}
 
-		protected override void OnLostFocus(RoutedEventArgs e)
+		protected override void OnLostFocus(FocusChangedEventArgs e)
 		{
 			base.OnLostFocus(e);
 			if(WindowState == WindowState.FullScreen && ConfigManager.Config.Video.UseExclusiveFullscreen) {
@@ -668,15 +723,16 @@ namespace Mesen.Windows
 			}
 
 			if(e.Key != Key.None) {
-				_keyPressedStamp[e.Key] = _stopWatch.ElapsedTicks;
+				UInt16 keyCode = e.GetKeyCode();
+				_keyPressedStamp[keyCode] = _stopWatch.ElapsedTicks;
 
-				if(_isLinux && _pendingKeyUpEvents.TryGetValue(e.Key, out IDisposable? cancelTimer)) {
+				if(_isLinux && _pendingKeyUpEvents.TryGetValue(keyCode, out IDisposable? cancelTimer)) {
 					//Cancel any pending key up event
 					cancelTimer.Dispose();
-					_pendingKeyUpEvents.Remove(e.Key);
+					_pendingKeyUpEvents.Remove(keyCode);
 				}
 
-				InputApi.SetKeyState((UInt16)e.Key, true);
+				InputApi.SetKeyState(keyCode, true);
 			}
 
 			if(e.Key == Key.Tab || e.Key == Key.F10) {
@@ -693,23 +749,24 @@ namespace Mesen.Windows
 			}
 
 			if(e.Key != Key.None) {
-				if(e.Key.IsSpecialKey() && (!_keyPressedStamp.TryGetValue(e.Key, out long stamp) || ((_stopWatch.ElapsedTicks - stamp) * 1000 / Stopwatch.Frequency) < 10)) {
+				UInt16 keyCode = e.GetKeyCode();
+				if(e.IsSpecialKey() && (!_keyPressedStamp.TryGetValue(keyCode, out long stamp) || ((_stopWatch.ElapsedTicks - stamp) * 1000 / Stopwatch.Frequency) < 10)) {
 					//Key up received without key down, or key pressed for less than 10 ms, pretend the key was pressed for 50ms
 					//Some special keys can behave this way (e.g printscreen)
-					InputApi.SetKeyState((UInt16)e.Key, true);
-					DispatcherTimer.RunOnce(() => InputApi.SetKeyState((UInt16)e.Key, false), TimeSpan.FromMilliseconds(50), DispatcherPriority.MaxValue);
-					_keyPressedStamp.Remove(e.Key);
+					InputApi.SetKeyState(keyCode, true);
+					DispatcherTimer.RunOnce(() => InputApi.SetKeyState(keyCode, false), TimeSpan.FromMilliseconds(50), DispatcherPriority.MaxValue);
+					_keyPressedStamp.Remove(keyCode);
 					return;
 				}
 
-				_keyPressedStamp.Remove(e.Key);
+				_keyPressedStamp.Remove(keyCode);
 
 				if(_isLinux) {
 					//Process keyup events after 1ms on Linux to prevent key repeat from triggering key up/down repeatedly
-					IDisposable cancelTimer = DispatcherTimer.RunOnce(() => InputApi.SetKeyState((UInt16)e.Key, false), TimeSpan.FromMilliseconds(1), DispatcherPriority.MaxValue);
-					_pendingKeyUpEvents[e.Key] = cancelTimer;
+					IDisposable cancelTimer = DispatcherTimer.RunOnce(() => InputApi.SetKeyState(keyCode, false), TimeSpan.FromMilliseconds(1), DispatcherPriority.MaxValue);
+					_pendingKeyUpEvents[keyCode] = cancelTimer;
 				} else {
-					InputApi.SetKeyState((UInt16)e.Key, false);
+					InputApi.SetKeyState(keyCode, false);
 				}
 			}
 		}
@@ -722,17 +779,26 @@ namespace Mesen.Windows
 			}
 		}
 
-		private void timerUpdateBackgroundFlag(object? sender, EventArgs e)
+		private void MainMenu_Opened(object? sender, RoutedEventArgs e)
 		{
-			Window? activeWindow = ApplicationHelper.GetActiveWindow();
+			UpdateAutoPause();
+		}
 
-			PreferencesConfig cfg = ConfigManager.Config.Preferences;
-
+		private void TimerUpdateBackgroundFlag(object? sender, EventArgs e)
+		{
 			bool focusInMenu = MenuHelper.IsFocusInMenu(_mainMenu.MainMenu);
 			if(focusInMenu && !_focusInMenu) {
 				InputApi.ResetKeyState();
 			}
 			_focusInMenu = focusInMenu;
+
+			UpdateAutoPause();
+		}
+
+		private void UpdateAutoPause()
+		{
+			Window? activeWindow = ApplicationHelper.GetActiveWindow();
+			PreferencesConfig cfg = ConfigManager.Config.Preferences;
 
 			bool needPause = activeWindow == null && cfg.PauseWhenInBackground;
 			if(activeWindow != null) {
@@ -743,7 +809,7 @@ namespace Mesen.Windows
 
 			if(needPause) {
 				if(!EmuApi.IsPaused()) {
-					_needResume = true;
+					_model.MainMenu.AutoPaused = true;
 
 					DebuggerWindow? wnd = DebugWindowManager.GetDebugWindow<DebuggerWindow>(x => x.CpuType == _model.RomInfo.ConsoleType.GetMainCpuType());
 					if(wnd != null) {
@@ -753,11 +819,11 @@ namespace Mesen.Windows
 
 					EmuApi.Pause();
 				}
-			} else if(_needResume) {
+			} else if(_model.MainMenu.AutoPaused) {
 				//Don't resume if the load/save state dialog is opened
 				if(!_model.RecentGames.Visible) {
 					EmuApi.Resume();
-					_needResume = false;
+					_model.MainMenu.AutoPaused = false;
 				}
 			}
 		}

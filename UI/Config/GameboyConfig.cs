@@ -1,5 +1,5 @@
-﻿using Mesen.Interop;
-using ReactiveUI.Fody.Helpers;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
+using Mesen.Interop;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,33 +9,41 @@ using System.Threading.Tasks;
 
 namespace Mesen.Config
 {
-	public class GameboyConfig : BaseConfig<GameboyConfig>
+	public partial class GameboyConfig : BaseConfig<GameboyConfig>
 	{
-		[Reactive] public ConsoleOverrideConfig ConfigOverrides { get; set; } = new();
+		[ObservableProperty] public partial ConsoleOverrideConfig ConfigOverrides { get; set; } = new();
 
-		[Reactive] public ControllerConfig Controller { get; set; } = new();
+		[ObservableProperty] public partial ControllerConfig Controller { get; set; } = new();
+		[ObservableProperty] public partial ControllerConfig LinkedController { get; set; } = new();
 
-		[Reactive] public GameboyModel Model { get; set; } = GameboyModel.AutoFavorGbc;
-		[Reactive] public bool UseSgb2 { get; set; } = true;
+		[ObservableProperty] public partial GameboyModel Model { get; set; } = GameboyModel.AutoFavorBest;
+		[ObservableProperty] public partial bool UseSgb2 { get; set; } = true;
 
-		[Reactive] public bool BlendFrames { get; set; } = true;
-		[Reactive] public bool GbcAdjustColors { get; set; } = true;
-		
-		[Reactive] public bool DisableBackground { get; set; } = false;
-		[Reactive] public bool DisableSprites { get; set; } = false;
-		[Reactive] public bool HideSgbBorders { get; set; } = false;
+		[ObservableProperty] public partial bool UseLocalLinkCable { get; set; } = false;
+		[ObservableProperty] public partial GbLocalLinkOutputOption LocalLinkCableVideoOutput { get; set; } = GbLocalLinkOutputOption.Both;
+		[ObservableProperty] public partial GbLocalLinkOutputOption LocalLinkCableAudioOutput { get; set; } = GbLocalLinkOutputOption.Both;
 
-		[Reactive] public RamState RamPowerOnState { get; set; } = RamState.Random;
-		[Reactive] public bool AllowInvalidInput { get; set; } = false;
+		[ObservableProperty] public partial bool BlendFrames { get; set; } = true;
+		[ObservableProperty] public partial bool GbcAdjustColors { get; set; } = true;
 
-		[Reactive] public UInt32[] BgColors { get; set; } = new UInt32[] { 0xFFFFFFFF, 0xFFB0B0B0, 0xFF686868, 0xFF000000 };
-		[Reactive] public UInt32[] Obj0Colors { get; set; } = new UInt32[] { 0xFFFFFFFF, 0xFFB0B0B0, 0xFF686868, 0xFF000000 };
-		[Reactive] public UInt32[] Obj1Colors { get; set; } = new UInt32[] { 0xFFFFFFFF, 0xFFB0B0B0, 0xFF686868, 0xFF000000 };
+		[ObservableProperty] public partial bool DisableBackground { get; set; } = false;
+		[ObservableProperty] public partial bool DisableSprites { get; set; } = false;
+		[ObservableProperty] public partial bool RemoveSpriteLimit { get; set; } = false;
+		[ObservableProperty] public partial bool HideSgbBorders { get; set; } = false;
 
-		[Reactive][MinMax(0, 100)] public UInt32 Square1Vol { get; set; } = 100;
-		[Reactive][MinMax(0, 100)] public UInt32 Square2Vol { get; set; } = 100;
-		[Reactive][MinMax(0, 100)] public UInt32 NoiseVol { get; set; } = 100;
-		[Reactive][MinMax(0, 100)] public UInt32 WaveVol { get; set; } = 100;
+		[ObservableProperty] public partial RamState RamPowerOnState { get; set; } = RamState.Random;
+		[ObservableProperty] public partial bool AllowInvalidInput { get; set; } = false;
+
+		[ObservableProperty][MinMax(0, 1000)] public partial UInt32 OverclockScanlineCount { get; set; } = 0;
+
+		[ObservableProperty] public partial UInt32[] BgColors { get; set; } = new UInt32[] { 0xFFFFFFFF, 0xFFB0B0B0, 0xFF686868, 0xFF000000 };
+		[ObservableProperty] public partial UInt32[] Obj0Colors { get; set; } = new UInt32[] { 0xFFFFFFFF, 0xFFB0B0B0, 0xFF686868, 0xFF000000 };
+		[ObservableProperty] public partial UInt32[] Obj1Colors { get; set; } = new UInt32[] { 0xFFFFFFFF, 0xFFB0B0B0, 0xFF686868, 0xFF000000 };
+
+		[ObservableProperty][MinMax(0, 100)] public partial UInt32 Square1Vol { get; set; } = 100;
+		[ObservableProperty][MinMax(0, 100)] public partial UInt32 Square2Vol { get; set; } = 100;
+		[ObservableProperty][MinMax(0, 100)] public partial UInt32 NoiseVol { get; set; } = 100;
+		[ObservableProperty][MinMax(0, 100)] public partial UInt32 WaveVol { get; set; } = 100;
 
 		public void ApplyConfig()
 		{
@@ -43,17 +51,25 @@ namespace Mesen.Config
 
 			ConfigApi.SetGameboyConfig(new InteropGameboyConfig() {
 				Controller = Controller.ToInterop(),
+				LinkedController = LinkedController.ToInterop(),
 				Model = Model,
 				UseSgb2 = UseSgb2,
+
+				UseLocalLinkCable = UseLocalLinkCable,
+				LocalLinkCableVideoOutput = LocalLinkCableVideoOutput,
+				LocalLinkCableAudioOutput = LocalLinkCableAudioOutput,
 
 				BlendFrames = BlendFrames,
 				GbcAdjustColors = GbcAdjustColors,
 				DisableBackground = DisableBackground,
 				DisableSprites = DisableSprites,
+				RemoveSpriteLimit = RemoveSpriteLimit,
 				HideSgbBorders = HideSgbBorders,
 
 				RamPowerOnState = RamPowerOnState,
 				AllowInvalidInput = AllowInvalidInput,
+
+				OverclockScanlineCount = OverclockScanlineCount,
 
 				BgColors = BgColors,
 				Obj0Colors = Obj0Colors,
@@ -76,26 +92,34 @@ namespace Mesen.Config
 	public struct InteropGameboyConfig
 	{
 		public InteropControllerConfig Controller;
+		public InteropControllerConfig LinkedController;
 
 		public GameboyModel Model;
 		[MarshalAs(UnmanagedType.I1)] public bool UseSgb2;
 
+		[MarshalAs(UnmanagedType.I1)] public bool UseLocalLinkCable;
+		public GbLocalLinkOutputOption LocalLinkCableVideoOutput;
+		public GbLocalLinkOutputOption LocalLinkCableAudioOutput;
+
 		[MarshalAs(UnmanagedType.I1)] public bool BlendFrames;
 		[MarshalAs(UnmanagedType.I1)] public bool GbcAdjustColors;
-		
+
 		[MarshalAs(UnmanagedType.I1)] public bool DisableBackground;
 		[MarshalAs(UnmanagedType.I1)] public bool DisableSprites;
+		[MarshalAs(UnmanagedType.I1)] public bool RemoveSpriteLimit;
 		[MarshalAs(UnmanagedType.I1)] public bool HideSgbBorders;
 
 		public RamState RamPowerOnState;
 		[MarshalAs(UnmanagedType.I1)] public bool AllowInvalidInput;
 
+		public UInt32 OverclockScanlineCount;
+
 		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
 		public UInt32[] BgColors;
-		
+
 		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
 		public UInt32[] Obj0Colors;
-		
+
 		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
 		public UInt32[] Obj1Colors;
 
@@ -105,8 +129,16 @@ namespace Mesen.Config
 		public UInt32 WaveVol;
 	}
 
+	public enum GbLocalLinkOutputOption
+	{
+		Both = 0,
+		MainSystemOnly = 1,
+		SubSystemOnly = 2
+	}
+
 	public enum GameboyModel
 	{
+		AutoFavorBest,
 		AutoFavorGbc,
 		AutoFavorSgb,
 		AutoFavorGb,

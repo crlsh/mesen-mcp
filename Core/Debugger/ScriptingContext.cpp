@@ -12,13 +12,12 @@
 #include "Shared/Emulator.h"
 #include "Shared/EmuSettings.h"
 #include "Shared/EventType.h"
-#include "Shared/SaveStateManager.h"
 #include "Utilities/magic_enum.hpp"
 #include "Utilities/StringUtilities.h"
 
 ScriptingContext* ScriptingContext::_context = nullptr;
 
-ScriptingContext::ScriptingContext(Debugger *debugger)
+ScriptingContext::ScriptingContext(Debugger* debugger)
 {
 	_debugger = debugger;
 	_settings = debugger->GetEmulator()->GetSettings();
@@ -104,15 +103,31 @@ bool ScriptingContext::LoadScript(string scriptName, string path, string scriptC
 		}
 	}
 
-	if(lua_isstring(_lua, -1)) {
-		ProcessLuaError();
-	}
+	ProcessLuaError();
+
 	return false;
+}
+
+string ScriptingContext::GetErrorMessage()
+{
+	string errorMsg = "";
+	if(lua_type(_lua, -1) == LUA_TSTRING) {
+		errorMsg = lua_tostring(_lua, -1);
+	} else if(lua_istable(_lua, -1)) {
+		//Serialize tables to Lua-formatted string
+		errorMsg = "error: " + LuaApi::SerializeTable(_lua);
+	} else {
+		//Convert all other values to a string
+		luaL_tolstring(_lua, -1, nullptr);
+		errorMsg = string("error: ") + lua_tostring(_lua, -1);
+		lua_pop(_lua, 1);
+	}
+	return errorMsg;
 }
 
 void ScriptingContext::ProcessLuaError()
 {
-	string errorMsg = lua_tostring(_lua, -1);
+	string errorMsg = GetErrorMessage();
 	if(StringUtilities::Contains(errorMsg, "attempt to call a nil value (global 'require')") || StringUtilities::Contains(errorMsg, "attempt to index a nil value (global 'os')") || StringUtilities::Contains(errorMsg, "attempt to index a nil value (global 'io')")) {
 		Log("I/O and OS libraries are disabled by default for security.\nYou can enable them here:\nScript->Settings->Script Window->Restrictions->Allow access to I/O and OS functions.");
 	} else if(StringUtilities::Contains(errorMsg, "module 'socket.core' not found")) {
@@ -135,17 +150,17 @@ void ScriptingContext::ExecutionCountHook(lua_State* lua)
 void ScriptingContext::LuaOpenLibs(lua_State* L, bool allowIoOsAccess)
 {
 	constexpr luaL_Reg loadedlibs[] = {
-	  {"_G", luaopen_base},
-	  {LUA_LOADLIBNAME, luaopen_package},
-	  {LUA_COLIBNAME, luaopen_coroutine},
-	  {LUA_TABLIBNAME, luaopen_table},
-	  {LUA_IOLIBNAME, luaopen_io},
-	  {LUA_OSLIBNAME, luaopen_os},
-	  {LUA_STRLIBNAME, luaopen_string},
-	  {LUA_MATHLIBNAME, luaopen_math},
-	  {LUA_UTF8LIBNAME, luaopen_utf8},
-	  {LUA_DBLIBNAME, luaopen_debug},
-	  {NULL, NULL}
+		{ "_G", luaopen_base },
+		{ LUA_LOADLIBNAME, luaopen_package },
+		{ LUA_COLIBNAME, luaopen_coroutine },
+		{ LUA_TABLIBNAME, luaopen_table },
+		{ LUA_IOLIBNAME, luaopen_io },
+		{ LUA_OSLIBNAME, luaopen_os },
+		{ LUA_STRLIBNAME, luaopen_string },
+		{ LUA_MATHLIBNAME, luaopen_math },
+		{ LUA_UTF8LIBNAME, luaopen_utf8 },
+		{ LUA_DBLIBNAME, luaopen_debug },
+		{ NULL, NULL }
 	};
 
 	const luaL_Reg* lib;
@@ -158,16 +173,41 @@ void ScriptingContext::LuaOpenLibs(lua_State* L, bool allowIoOsAccess)
 			}
 		}
 		luaL_requiref(L, lib->name, lib->func, 1);
-		lua_pop(L, 1);  /* remove lib */
+		lua_pop(L, 1); /* remove lib */
 	}
 }
 
 void ScriptingContext::Log(string message)
 {
 	auto lock = _logLock.AcquireSafe();
-	_logRows.push_back(message);
-	if(_logRows.size() > 500) {
-		_logRows.pop_front();
+	size_t start = 0;
+
+	if(message.size() <= 200) {
+		_logRows.push_back(message);
+		if(_logRows.size() > 500) {
+			_logRows.pop_front();
+		}
+	} else {
+		//Split large strings into several separate lines
+		//This is needed to prevent performance issues in the UI
+		//when a single line is several thousand characters long.
+		while(start < message.size()) {
+			size_t pos = message.find_first_of(',', start + 200);
+
+			if(pos == string::npos) {
+				pos = message.find_first_of(' ', start + 200);
+				if(pos == string::npos) {
+					pos = std::min<size_t>(message.size() - 1, start + 300);
+				}
+			}
+
+			_logRows.push_back(message.substr(start, pos - start + 1));
+			start = pos + 1;
+
+			if(_logRows.size() > 500) {
+				_logRows.pop_front();
+			}
+		}
 	}
 }
 
@@ -175,7 +215,7 @@ string ScriptingContext::GetLog()
 {
 	auto lock = _logLock.AcquireSafe();
 	stringstream ss;
-	for(string &msg : _logRows) {
+	for(string& msg : _logRows) {
 		ss << msg << "\n";
 	}
 	return ss.str();
@@ -192,7 +232,7 @@ string ScriptingContext::GetScriptName()
 }
 
 template<typename T>
-void ScriptingContext::CallMemoryCallback(AddressInfo relAddr, T &value, CallbackType type, CpuType cpuType)
+void ScriptingContext::CallMemoryCallback(AddressInfo relAddr, T& value, CallbackType type, CpuType cpuType)
 {
 	_allowSaveState = type == CallbackType::Exec && cpuType == _defaultCpuType;
 	InternalCallMemoryCallback(relAddr, value, type, cpuType);
@@ -251,14 +291,13 @@ void ScriptingContext::UnregisterMemoryCallback(CallbackType type, int startAddr
 	}
 
 	for(size_t i = 0; i < _callbacks[(int)type].size(); i++) {
-		MemoryCallback &callback = _callbacks[(int)type][i];
-		bool isMatch = (
+		MemoryCallback& callback = _callbacks[(int)type][i];
+		bool isMatch =
 			callback.Reference == reference &&
 			callback.Cpu == cpuType &&
 			callback.MemType == memType &&
 			(int)callback.StartAddress == startAddr &&
-			(int)callback.EndAddress == endAddr
-		);
+			(int)callback.EndAddress == endAddr;
 
 		if(isMatch) {
 			_callbacks[(int)type].erase(_callbacks[(int)type].begin() + i);
@@ -276,7 +315,7 @@ void ScriptingContext::RegisterEventCallback(EventType type, int reference)
 
 void ScriptingContext::UnregisterEventCallback(EventType type, int reference)
 {
-	vector<int> &callbacks = _eventCallbacks[(int)type];
+	vector<int>& callbacks = _eventCallbacks[(int)type];
 	callbacks.erase(std::remove(callbacks.begin(), callbacks.end(), reference), callbacks.end());
 	luaL_unref(_lua, LUA_REGISTRYINDEX, reference);
 }
@@ -300,16 +339,20 @@ void ScriptingContext::InternalCallMemoryCallback(AddressInfo relAddr, T& value,
 	for(MemoryCallback& callback : _callbacks[(int)type]) {
 		if(callback.Cpu != cpuType) {
 			continue;
-		} 
+		}
 
+		int32_t address;
 		if(DebugUtilities::IsRelativeMemory(callback.MemType)) {
 			if(!IsAddressMatch(callback, relAddr)) {
 				continue;
 			}
+			address = relAddr.Address;
 		} else {
-			if(!IsAddressMatch(callback, _debugger->GetAbsoluteAddress(relAddr))) {
+			AddressInfo absAddr = _debugger->GetAbsoluteAddress(relAddr);
+			if(!IsAddressMatch(callback, absAddr)) {
 				continue;
 			}
+			address = absAddr.Address;
 		}
 
 		if(needTimerReset) {
@@ -319,7 +362,7 @@ void ScriptingContext::InternalCallMemoryCallback(AddressInfo relAddr, T& value,
 
 		int top = lua_gettop(_lua);
 		lua_rawgeti(_lua, LUA_REGISTRYINDEX, callback.Reference);
-		lua_pushinteger(_lua, relAddr.Address);
+		lua_pushinteger(_lua, address);
 		lua_pushinteger(_lua, value);
 		if(lua_pcall(_lua, 2, LUA_MULTRET, 0) != 0) {
 			ProcessLuaError();

@@ -17,7 +17,7 @@ namespace Mesen.Utilities
 			return MesenMsgBox.Show(null, "UnexpectedError", MessageBoxButtons.OK, MessageBoxIcon.Error, ex.Message + Environment.NewLine + ex.StackTrace);
 		}
 
-		public static Task<DialogResult> Show(IRenderRoot? parent, string text, MessageBoxButtons buttons, MessageBoxIcon icon, params string[] args)
+		public static Task<DialogResult> Show(Window? parent, string text, MessageBoxButtons buttons, MessageBoxIcon icon, params string[] args)
 		{
 			Window? wnd = parent as Window;
 			if(parent != null && wnd == null) {
@@ -28,12 +28,12 @@ namespace Mesen.Utilities
 
 			if(resourceText.StartsWith("[[")) {
 				if(args != null && args.Length > 0) {
-					return MessageBox.Show(wnd, string.Format("Critical error (" + text + ") {0}", args), "Mesen", buttons, icon);
+					return MessageBox.Show(wnd, string.Format("Critical error (" + text + ") {0}", args), "MesenCE", buttons, icon);
 				} else {
-					return MessageBox.Show(wnd, string.Format("Critical error (" + text + ")"), "Mesen", buttons, icon);
+					return MessageBox.Show(wnd, string.Format("Critical error (" + text + ")"), "MesenCE", buttons, icon);
 				}
 			} else {
-				return MessageBox.Show(wnd, ResourceHelper.GetMessage(text, args), "Mesen", buttons, icon);
+				return MessageBox.Show(wnd, ResourceHelper.GetMessage(text, args), "MesenCE", buttons, icon);
 			}
 		}
 	}

@@ -34,7 +34,7 @@ public static class OpCodeHelper
 		if(!_data.TryGetValue(seg.Data.CpuType, out CpuDocumentationData? doc)) {
 			return null;
 		}
-		
+
 		OpCodeDesc? desc = null;
 		string opname = seg.Text.ToLower();
 		if(doc.OpDescGetter != null) {
@@ -55,7 +55,7 @@ public static class OpCodeHelper
 
 		StackPanel panel = new StackPanel() { MaxWidth = 250, HorizontalAlignment = HorizontalAlignment.Left };
 		panel.Children.Add(new TextBlock() { Text = desc.Name, FontSize = 14, Margin = new(0, 2), TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.Bold });
-		panel.Children.Add(new TextBlock() { Text = desc.Description, Margin = new(0, 3, 0, 5),  TextWrapping = TextWrapping.Wrap });
+		panel.Children.Add(new TextBlock() { Text = desc.Description, Margin = new(0, 3, 0, 5), TextWrapping = TextWrapping.Wrap });
 
 		TooltipEntries items = new();
 		items.AddCustomEntry("OP", panel);
@@ -152,6 +152,8 @@ public static class OpCodeHelper
 		//TODOGBA add missing descriptions, etc.
 		InitDocumentation(CpuType.Gba, ReadDocumentationFile("GbaDocumentation.json"));
 
+		string[] conditions = { "eq", "ne", "cs", "cc", "mi", "pl", "vs", "vc", "hi", "ls", "ge", "lt", "gt", "le", "al" };
+
 		Func<Dictionary<string, OpCodeDesc>, string, CodeSegmentInfo, bool, OpCodeDesc?> parseOp = (dict, opName, codeSegment, checkSetFlags) => {
 			OpCodeDesc? desc = null;
 			bool updateFlags = false;
@@ -170,14 +172,10 @@ public static class OpCodeHelper
 					desc = desc.Clone();
 
 					if(byteSize) {
-						desc.Name += " (byte)";
-					}
-
-					if(halfWordSize) {
-						desc.Name += " (half-word)";
-					}
-
-					if(signed) {
+						desc.Name += signed ? " (byte, signed)" : " (byte)";
+					} else if(halfWordSize) {
+						desc.Name += signed ? " (half-word, signed)" : " (half-word)";
+					} else if(signed) {
 						desc.Name += " (signed)";
 					}
 
@@ -216,7 +214,8 @@ public static class OpCodeHelper
 				return desc;
 			}
 
-			if(checkSetFlags && opName.EndsWith("s")) {
+			string? condition = conditions.FirstOrDefault(opName.EndsWith);
+			if((condition == null || opName.Length == 4) && checkSetFlags && opName.EndsWith("s")) {
 				updateFlags = true;
 				opName = opName.Substring(0, opName.Length - 1);
 			}
@@ -263,13 +262,12 @@ public static class OpCodeHelper
 				return desc;
 			}
 
-			if(opName != "mrs" && opName.EndsWith("s")) {
+			if((byteSize || halfWordSize) && opName.EndsWith("s")) {
 				signed = true;
 				opName = opName.Substring(0, opName.Length - 1);
 			}
 
-			string[] conditions = { "eq", "ne", "cs", "cc", "mi", "pl", "vs", "vc", "hi", "ls", "ge", "lt", "gt", "le", "al" };
-			string? condition = conditions.FirstOrDefault(opName.EndsWith);
+			condition = conditions.FirstOrDefault(opName.EndsWith);
 			if(condition != null) {
 				condHint = condition switch {
 					"eq" => "Equal (Zero Set)",
@@ -291,6 +289,15 @@ public static class OpCodeHelper
 				};
 
 				opName = opName.Substring(0, opName.Length - 2);
+			}
+
+			if(tryParseOp()) {
+				return desc;
+			}
+
+			if(opName != "mrs" && opName.EndsWith("s")) {
+				signed = true;
+				opName = opName.Substring(0, opName.Length - 1);
 			}
 
 			if(tryParseOp()) {

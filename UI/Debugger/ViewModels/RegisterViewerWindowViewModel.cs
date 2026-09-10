@@ -2,13 +2,12 @@
 using Avalonia.Controls.Selection;
 using Avalonia.Media;
 using Avalonia.Threading;
+using CommunityToolkit.Mvvm.ComponentModel;
 using Mesen.Config;
 using Mesen.Debugger.RegisterViewer;
 using Mesen.Debugger.Utilities;
 using Mesen.Interop;
 using Mesen.ViewModels;
-using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -16,18 +15,18 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace Mesen.Debugger.ViewModels
 {
-	public class RegisterViewerWindowViewModel : DisposableViewModel, ICpuTypeModel
+	public partial class RegisterViewerWindowViewModel : DisposableViewModel, ICpuTypeModel
 	{
-		[Reactive] public List<RegisterViewerTab> Tabs { get; set; } = new List<RegisterViewerTab>();
-		
-		public RegisterViewerConfig Config { get; }
-		public RefreshTimingViewModel RefreshTiming { get; }
+		[ObservableProperty] public partial List<RegisterViewerTab> Tabs { get; set; } = new List<RegisterViewerTab>();
 
-		[Reactive] public List<object> FileMenuActions { get; private set; } = new();
-		[Reactive] public List<object> ViewMenuActions { get; private set; } = new();
+		public RegisterViewerConfig Config { get; }
+		[ObservableProperty] public partial RefreshTimingViewModel RefreshTiming { get; private set; }
+
+		[ObservableProperty] public partial List<object> FileMenuActions { get; private set; } = new();
+		[ObservableProperty] public partial List<object> ViewMenuActions { get; private set; } = new();
 
 		private BaseState? _state = null;
-		
+
 		public CpuType CpuType
 		{
 			get => _romInfo.ConsoleType.GetMainCpuType();
@@ -49,7 +48,6 @@ namespace Mesen.Debugger.ViewModels
 			}
 
 			UpdateRomInfo();
-			RefreshTiming.UpdateMinMaxValues(CpuType);
 			RefreshData();
 		}
 
@@ -157,18 +155,16 @@ namespace Mesen.Debugger.ViewModels
 
 		public void OnGameLoaded()
 		{
+			RefreshTiming = new RefreshTimingViewModel(Config.RefreshTiming, CpuType);
 			UpdateRomInfo();
 			RefreshData();
 		}
 	}
 
-	public class RegisterViewerTab : ReactiveObject
+	public partial class RegisterViewerTab : ObservableObject
 	{
-		private string _name;
-		private List<RegEntry> _data;
-
-		public string TabName { get => _name; set => this.RaiseAndSetIfChanged(ref _name, value); }
-		public List<RegEntry> Data { get => _data; set => this.RaiseAndSetIfChanged(ref _data, value); }
+		[ObservableProperty] public partial string TabName { get; set; }
+		[ObservableProperty] public partial List<RegEntry> Data { get; set; }
 		public SelectionModel<RegEntry?> Selection { get; set; } = new();
 		public List<int> ColumnWidths { get; set; } = new();
 
@@ -177,8 +173,8 @@ namespace Mesen.Debugger.ViewModels
 
 		public RegisterViewerTab(string name, List<RegEntry> data, CpuType? cpuType = null, MemoryType? memoryType = null)
 		{
-			_name = name;
-			_data = data;
+			TabName = name;
+			Data = data;
 			CpuType = cpuType;
 			MemoryType = memoryType;
 		}
@@ -198,7 +194,7 @@ namespace Mesen.Debugger.ViewModels
 
 	public class RegEntry : INotifyPropertyChanged
 	{
-		private static ISolidColorBrush HeaderBgBrush = new SolidColorBrush(0x40B0B0B0);
+		private readonly static ISolidColorBrush HeaderBgBrush = new SolidColorBrush(0x40B0B0B0);
 
 		public string Address { get; private set; }
 		public string Name { get; private set; }
@@ -211,9 +207,10 @@ namespace Mesen.Debugger.ViewModels
 		public event PropertyChangedEventHandler? PropertyChanged;
 
 		public string Value
-		{ 
+		{
 			get => _value;
-			set {
+			set
+			{
 				if(_value != value) {
 					_value = value;
 					PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Value)));

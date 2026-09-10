@@ -4,6 +4,8 @@
 #The emulation core also requires SDL2.
 #Run "make" to build, "make run" to run
 
+UNAME_S := $(shell uname -s)
+
 MESENFLAGS=
 
 ifeq ($(USE_GCC),true)
@@ -14,6 +16,9 @@ ifeq ($(USE_GCC),true)
 else
 	CXX := clang++
 	CC := clang
+	ifeq ($(UNAME_S),Linux)
+		MESENFLAGS += -Werror -Wno-undefined-inline -Wno-return-type-c-linkage
+	endif
 	PROFILE_GEN_FLAG := -fprofile-instr-generate=$(CURDIR)/PGOHelper/pgo.profraw
 	PROFILE_USE_FLAG := -fprofile-instr-use=$(CURDIR)/PGOHelper/pgo.profdata
 endif
@@ -25,7 +30,6 @@ LINKCHECKUNRESOLVED := -Wl,-z,defs
 
 LINKOPTIONS :=
 MESENOS :=
-UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S),Linux)
 	MESENOS := linux
@@ -103,7 +107,7 @@ ifeq ($(PGO),optimize)
 endif
 
 ifneq ($(STATICLINK),false)
-	LINKOPTIONS += -static-libgcc -static-libstdc++ 
+	LINKOPTIONS += -static-libgcc -static-libstdc++ -Wl,--export-dynamic,--exclude-libs=libstdc++.a
 endif
 
 ifeq ($(MESENOS),osx)
@@ -131,7 +135,7 @@ endif
 ifeq ($(USE_AOT),true)
 	PUBLISHFLAGS ?=  -r $(MESENPLATFORM) -p:PublishSingleFile=false -p:PublishAot=true -p:SelfContained=true
 else
-	PUBLISHFLAGS ?=  -r $(MESENPLATFORM) --no-self-contained true -p:PublishSingleFile=true
+	PUBLISHFLAGS ?=  -r $(MESENPLATFORM) --no-self-contained -p:PublishSingleFile=true
 endif
 
 

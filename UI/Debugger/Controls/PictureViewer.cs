@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Data;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -11,7 +12,9 @@ using Avalonia.Platform;
 using Avalonia.Rendering.SceneGraph;
 using Avalonia.Skia;
 using Avalonia.Threading;
+using Mesen.Interop;
 using Mesen.Utilities;
+using Mesen.ViewModels;
 using SkiaSharp;
 using System;
 using System.Collections.Generic;
@@ -70,7 +73,7 @@ namespace Mesen.Debugger.Controls
 			get { return GetValue(ZoomProperty); }
 			set { SetValue(ZoomProperty, value); }
 		}
-		
+
 		public bool AllowSelection
 		{
 			get { return GetValue(AllowSelectionProperty); }
@@ -218,12 +221,12 @@ namespace Mesen.Debugger.Controls
 		{
 			base.OnAttachedToVisualTree(e);
 			_timer.Interval = TimeSpan.FromMilliseconds(250);
-			_timer.Tick += timer_Tick;
+			_timer.Tick += Timer_Tick;
 			_timer.Start();
 			UpdateSize();
 		}
 
-		private void timer_Tick(object? sender, EventArgs e)
+		private void Timer_Tick(object? sender, EventArgs e)
 		{
 			if(SelectionRect != default) {
 				InvalidateVisual();
@@ -271,10 +274,25 @@ namespace Mesen.Debugger.Controls
 		public async void ExportToPng()
 		{
 			if(Source is Bitmap bitmap) {
-				string? filename = await FileDialogHelper.SaveFile(null, null, this.VisualRoot, FileDialogHelper.PngExt);
-				if(filename != null) {
-					bitmap.Save(filename);
+				Window? wnd = this.GetWindow();
+
+				string initialFilename = EmuApi.GetRomInfo().GetRomName();
+				if(wnd != null) {
+					initialFilename += " - " + wnd.Title;
 				}
+				initialFilename += "." + FileDialogHelper.PngExt;
+
+				string? filename = await FileDialogHelper.SaveFile(null, initialFilename, wnd, FileDialogHelper.PngExt);
+				if(filename != null) {
+					bitmap.Save(filename, PngBitmapEncoderOptions.Default);
+				}
+			}
+		}
+
+		public async void CopyToClipboard()
+		{
+			if(Source is Bitmap bitmap) {
+				this.GetWindow()?.Clipboard?.SetBitmapAsync(bitmap);
 			}
 		}
 
@@ -433,10 +451,10 @@ namespace Mesen.Debugger.Controls
 			if(Source == null) {
 				return;
 			}
-			
+
 			int width = (int)(Source.Size.Width * Zoom);
 			int height = (int)(Source.Size.Height * Zoom);
-			
+
 			double dpiScale = 1 / LayoutHelper.GetLayoutScale(this);
 			using var scale = context.PushTransform(Matrix.CreateScale(dpiScale, dpiScale));
 
@@ -504,7 +522,7 @@ namespace Mesen.Debugger.Controls
 
 			if(SelectionRect != default) {
 				Rect rect = ToDrawRect(SelectionRect);
-				
+
 				DashStyle dashes = new DashStyle(DashStyle.Dash.Dashes, _stopWatch.ElapsedMilliseconds / 250.0);
 				context.DrawRectangle(new Pen(Brushes.Black, 2), rect.Inflate(0.5));
 				context.DrawRectangle(new Pen(Brushes.White, 2, dashes), rect.Inflate(0.5));
@@ -554,7 +572,7 @@ namespace Mesen.Debugger.Controls
 
 		private DynamicBitmap _source;
 		private double _zoom;
-		private SKBitmap _bitmap;
+		private SKImage _image;
 		private SKPaint _highlightPaint;
 
 		public PictureViewerDrawOperation(PictureViewer viewer)
@@ -568,20 +586,20 @@ namespace Mesen.Debugger.Controls
 			_source = (DynamicBitmap)viewer.Source;
 			_zoom = viewer.Zoom;
 			using(var lockedBuffer = ((WriteableBitmap)_source).Lock()) {
-				var info = new SKImageInfo(
+				SKImageInfo info = new(
 					lockedBuffer.Size.Width,
 					lockedBuffer.Size.Height,
 					lockedBuffer.Format.ToSkColorType(),
 					SKAlphaType.Premul
 				);
-				_bitmap = new SKBitmap();
-				_bitmap.InstallPixels(info, lockedBuffer.Address);
+				_image = SKImage.FromPixels(info, lockedBuffer.Address);
 			}
 			_highlightPaint = new SKPaint() { IsStroke = true, Color = new SKColor(Colors.LightSteelBlue.R, Colors.LightSteelBlue.G, Colors.LightSteelBlue.B) };
 		}
 
 		public void Dispose()
 		{
+			_image.Dispose();
 		}
 
 		public bool Equals(ICustomDrawOperation? other) => false;
@@ -609,7 +627,7 @@ namespace Mesen.Debugger.Controls
 				int height = (int)(_source.Size.Height * _zoom);
 
 				using(_source.Lock(true)) {
-					canvas.DrawBitmap(_bitmap,
+					canvas.DrawImage(_image,
 						new SKRect(0, 0, (int)_source.Size.Width, (int)_source.Size.Height),
 						new SKRect(0, 0, width, height)
 					);
@@ -626,7 +644,7 @@ namespace Mesen.Debugger.Controls
 			}
 		}
 	}
-	
+
 	public class PositionClickedEventArgs : RoutedEventArgs
 	{
 		public PixelPoint Position { get; }

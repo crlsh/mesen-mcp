@@ -1,19 +1,19 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
-using System;
-using System.ComponentModel;
-using Avalonia.Input;
-using Mesen.ViewModels;
-using Mesen.GUI.Utilities;
-using Mesen.Utilities;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using Mesen.Interop;
 using Avalonia.VisualTree;
+using Mesen.GUI.Utilities;
+using Mesen.Interop;
+using Mesen.Utilities;
+using Mesen.ViewModels;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace Mesen.Windows
 {
@@ -108,7 +108,7 @@ namespace Mesen.Windows
 			_isDoubleTap = true;
 		}
 
-		public static async Task<CheatDbGameEntry?> Show(ConsoleType consoleType, Visual? parent)
+		public static async Task<CheatDbGameEntry?> Show(ConsoleType consoleType, Control? parent)
 		{
 			CheatDatabaseWindow wnd = new CheatDatabaseWindow(consoleType);
 			await wnd.ShowCenteredDialog(parent);

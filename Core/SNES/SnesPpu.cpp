@@ -2,11 +2,9 @@
 #include "SNES/SnesPpu.h"
 #include "SNES/SnesConsole.h"
 #include "SNES/SnesMemoryManager.h"
-#include "SNES/SnesCpu.h"
 #include "SNES/Spc.h"
 #include "SNES/InternalRegisters.h"
 #include "SNES/SnesControlManager.h"
-#include "SNES/SnesDmaController.h"
 #include "SNES/Debugger/SnesPpuTools.h"
 #include "Debugger/Debugger.h"
 #include "Shared/Emulator.h"
@@ -54,7 +52,7 @@ void SnesPpu::PowerOn()
 	_memoryManager = _console->GetMemoryManager();
 
 	_currentBuffer = _outputBuffers[0];
-	
+
 	_state = {};
 	_state.ForcedBlank = true;
 	_state.VramIncrementValue = 1;
@@ -71,7 +69,7 @@ void SnesPpu::PowerOn()
 	_console->InitializeRam(_oamRam, SnesPpu::SpriteRamSize);
 
 	memset(_spriteIndexes, 0xFF, sizeof(_spriteIndexes));
-	
+
 	UpdateNmiScanline();
 }
 
@@ -131,7 +129,7 @@ SnesPpuState& SnesPpu::GetStateRef()
 	return _state;
 }
 
-void SnesPpu::GetState(SnesPpuState &state, bool returnPartialState)
+void SnesPpu::GetState(SnesPpuState& state, bool returnPartialState)
 {
 	if(!returnPartialState) {
 		state = _state;
@@ -146,10 +144,10 @@ template<bool hiResMode>
 void SnesPpu::GetTilemapData(uint8_t layerIndex, uint8_t columnIndex)
 {
 	/* The current layer's options */
-	LayerConfig &config = _state.Layers[layerIndex];
+	LayerConfig& config = _state.Layers[layerIndex];
 
 	uint16_t vScroll = config.VScroll;
-	uint16_t hScroll = hiResMode ? (config.HScroll << 1) : config.HScroll;	
+	uint16_t hScroll = hiResMode ? (config.HScroll << 1) : config.HScroll;
 	if(_hOffset || _vOffset) {
 		uint16_t enableBit = layerIndex == 0 ? 0x2000 : 0x4000;
 		if(_state.BgMode == 4) {
@@ -209,8 +207,8 @@ void SnesPpu::GetTilemapData(uint8_t layerIndex, uint8_t columnIndex)
 template<bool hiResMode, uint8_t bpp, bool secondTile>
 void SnesPpu::GetChrData(uint8_t layerIndex, uint8_t column, uint8_t plane)
 {
-	LayerConfig &config = _state.Layers[layerIndex];
-	TileData &tileData = _layerData[layerIndex].Tiles[column];
+	LayerConfig& config = _state.Layers[layerIndex];
+	TileData& tileData = _layerData[layerIndex].Tiles[column];
 	uint16_t tilemapData = tileData.TilemapData;
 
 	bool largeTileWidth = hiResMode || config.LargeTiles;
@@ -238,15 +236,16 @@ void SnesPpu::GetChrData(uint8_t layerIndex, uint8_t column, uint8_t plane)
 
 	uint16_t tileIndex = tilemapData & 0x3FF;
 	if(largeTileWidth) {
-		tileIndex = (
+		tileIndex =
 			tileIndex +
 			(config.LargeTiles ? (((realY + tileData.VScroll) & 0x08) ? (vMirror ? 0 : 16) : (vMirror ? 16 : 0)) : 0) +
-			(largeTileWidth ? (useSecondTile ? (hMirror ? 0 : 1) : (hMirror ? 1 : 0)) : 0)
-		) & 0x3FF;
+			(largeTileWidth ? (useSecondTile ? (hMirror ? 0 : 1) : (hMirror ? 1 : 0)) : 0);
+
+		tileIndex &= 0x3FF;
 	}
 
 	uint16_t tileStart = config.ChrAddress + tileIndex * 4 * bpp;
-	
+
 	uint8_t baseYOffset = (realY + tileData.VScroll) & 0x07;
 
 	uint8_t yOffset = vMirror ? (7 - baseYOffset) : baseYOffset;
@@ -254,25 +253,41 @@ void SnesPpu::GetChrData(uint8_t layerIndex, uint8_t column, uint8_t plane)
 	tileData.ChrData[plane + (secondTile ? bpp / 2 : 0)] = _vram[pixelStart & 0x7FFF];
 }
 
+uint16_t SnesPpu::GetHvOffsetByteAddress(uint8_t columnIndex, bool forVertOffset)
+{
+	uint16_t tilemapAddr = _state.Layers[2].TilemapAddress;
+
+	// Mode 6 always uses tiles that are 16 pixels wide, so the 8x8 size becomes 16x8.
+	// Other code in this file already applies this, so don't apply it a second time here.
+	uint8_t vShift = _state.Layers[2].LargeTiles ? 4 : 3;
+	uint8_t hShift = _state.BgMode == 6 ? 3 : vShift;
+
+	uint16_t baseColumn = ((columnIndex << 3) + (_state.Layers[2].HScroll & ~0x07)) >> hShift;
+
+	uint16_t columnOffset = baseColumn & (_state.Layers[2].DoubleWidth ? 0x3F : 0x1F);
+	if(columnOffset >= 0x20) {
+		tilemapAddr += 0x400;
+		columnOffset &= 0x1F;
+	}
+
+	uint16_t rowOffset = (_state.Layers[2].VScroll + (forVertOffset ? 8 : 0)) >> vShift;
+	rowOffset &= _state.Layers[2].DoubleHeight ? 0x3F : 0x1F;
+	if(rowOffset >= 0x20) {
+		tilemapAddr += 0x400 << (_state.Layers[2].DoubleWidth ? 1 : 0);
+		rowOffset &= 0x1F;
+	}
+
+	return (tilemapAddr + ((columnOffset + (rowOffset << 5)) & 0x3FF)) & 0x7FFF;
+}
+
 void SnesPpu::GetHorizontalOffsetByte(uint8_t columnIndex)
 {
-	uint16_t columnOffset = (((columnIndex << 3) + (_state.Layers[2].HScroll & ~0x07)) >> 3) & (_state.Layers[2].DoubleWidth ? 0x3F : 0x1F);
-	uint16_t rowOffset = (_state.Layers[2].VScroll >> 3) & (_state.Layers[2].DoubleHeight ? 0x3F : 0x1F);
-
-	_hOffset = _vram[(_state.Layers[2].TilemapAddress + columnOffset + (rowOffset << 5)) & 0x7FFF];
+	_hOffset = _vram[GetHvOffsetByteAddress(columnIndex, false)];
 }
 
 void SnesPpu::GetVerticalOffsetByte(uint8_t columnIndex)
 {
-	uint16_t columnOffset = (((columnIndex << 3) + (_state.Layers[2].HScroll & ~0x07)) >> 3) & (_state.Layers[2].DoubleWidth ? 0x3F : 0x1F);
-	uint16_t rowOffset = (_state.Layers[2].VScroll >> 3) & (_state.Layers[2].DoubleHeight ? 0x3F : 0x1F);
-
-	uint16_t tileOffset = columnOffset + (rowOffset << 5);
-
-	//The vertical offset is 0x40 bytes later - but wraps around within the tilemap based on the tilemap size (0x800 or 0x1000 bytes)
-	uint16_t vOffsetAddr = _state.Layers[2].TilemapAddress + ((tileOffset + 0x20) & (_state.Layers[2].DoubleHeight ? 0x7FF : 0x3FF));
-
-	_vOffset = _vram[vOffsetAddr & 0x7FFF];
+	_vOffset = _vram[GetHvOffsetByteAddress(columnIndex, true)];
 }
 
 void SnesPpu::FetchTileData()
@@ -382,7 +397,7 @@ void SnesPpu::FetchTileData()
 
 				case 2: GetHorizontalOffsetByte(x >> 3); break;
 				case 3: GetVerticalOffsetByte(x >> 3); break;
-					
+
 				case 4: GetChrData<true, 4>(0, x >> 3, 0); break;
 				case 5: GetChrData<true, 4>(0, x >> 3, 1); break;
 				case 6: GetChrData<true, 4, true>(0, x >> 3, 0); break;
@@ -408,16 +423,12 @@ bool SnesPpu::ProcessEndOfScanline(uint16_t& hClock)
 
 				if(!_skipRender) {
 					_currentBuffer = _currentBuffer == _outputBuffers[0] ? _outputBuffers[1] : _outputBuffers[0];
-					if(_interlacedFrame) {
-						memcpy(_currentBuffer, GetPreviousScreenBuffer(), 512 * 478 * sizeof(uint16_t));
-					}
-					
+
 					//If we're not skipping this frame, reset the high resolution/interlace flags
-					_useHighResOutput = IsDoubleWidth() || _state.ScreenInterlace;
-					_interlacedFrame = _state.ScreenInterlace;
+					_useHighResOutput = IsDoubleWidth() || _interlacedFrame;
 				}
 			}
-			
+
 			if(_mosaicScanlineCounter) {
 				_mosaicScanlineCounter--;
 				if(_state.MosaicEnabled && !_mosaicScanlineCounter) {
@@ -435,14 +446,7 @@ bool SnesPpu::ProcessEndOfScanline(uint16_t& hClock)
 			_spriteEvalEnd = 0;
 			_spriteFetchingDone = false;
 
-			memset(_hasSpritePriority, 0, sizeof(_hasSpritePriority));
 			memcpy(_spritePriority, _spritePriorityCopy, sizeof(_spritePriority));
-			for(int i = 0; i < 255; i++) {
-				if(_spritePriority[i] < 4) {
-					_hasSpritePriority[_spritePriority[i]] = true;
-				}
-			}
-
 			memcpy(_spritePalette, _spritePaletteCopy, sizeof(_spritePalette));
 			memcpy(_spriteColors, _spriteColorsCopy, sizeof(_spriteColors));
 
@@ -460,6 +464,16 @@ bool SnesPpu::ProcessEndOfScanline(uint16_t& hClock)
 		hClock = 0;
 
 		_console->GetInternalRegisters()->ProcessAutoJoypad();
+
+		if(_scanline == 240) {
+			if(_interlacedFrame) {
+				switch(_settings->GetSnesConfig().DeinterlaceMode) {
+					case SnesDeinterlaceMode::CurrentField: memset(_currentBuffer, 0, 512 * 478 * sizeof(uint16_t)); break;
+					case SnesDeinterlaceMode::Weave: memcpy(GetPreviousScreenBuffer(), _currentBuffer, 512 * 478 * sizeof(uint16_t)); break;
+				}
+			}
+			_interlacedFrame = _state.ScreenInterlace;
+		}
 
 		if(_scanline == _nmiScanline) {
 			ProcessLocationLatchRequest();
@@ -488,17 +502,17 @@ bool SnesPpu::ProcessEndOfScanline(uint16_t& hClock)
 			_timeOver = false;
 			_emu->ProcessEvent(EventType::StartFrame);
 
-			_skipRender = (
+			_skipRender =
 				!_settings->GetSnesConfig().DisableFrameSkipping &&
 				(!_interlacedFrame || (_frameCount & 0x02)) &&
 				!_emu->GetRewindManager()->IsRewinding() &&
 				!_emu->GetVideoRenderer()->IsRecording() &&
 				(_settings->GetEmulationSpeed() == 0 || _settings->GetEmulationSpeed() > 150) &&
-				_frameSkipTimer.GetElapsedMS() < 10
-			);
-			
-			if(_emu->IsRunAheadFrame()) {
+				_frameSkipTimer.GetElapsedMS() < 10;
+
+			if(_isRunAheadFrame) {
 				_skipRender = true;
+				_isRunAheadFrame = false;
 			}
 
 			//Ensure the SPC is re-enabled for the next frame
@@ -509,6 +523,16 @@ bool SnesPpu::ProcessEndOfScanline(uint16_t& hClock)
 		return true;
 	}
 	return false;
+}
+
+void SnesPpu::ProcessRunAheadFrameStart()
+{
+	if(_state.Scanline >= _vblankStartScanline) {
+		//If the runahead frame starts during vblank (which it normally should,
+		//except if long DMAs were started before vblank and ended after vblank),
+		//skip rendering for this frame.
+		_isRunAheadFrame = true;
+	}
 }
 
 bool SnesPpu::IsInOverclockedScanline()
@@ -552,12 +576,19 @@ void SnesPpu::UpdateNmiScanline()
 	}
 
 	SnesConfig snesCfg = _settings->GetSnesConfig();
-	_overclockEnabled = snesCfg.PpuExtraScanlinesBeforeNmi > 0 || snesCfg.PpuExtraScanlinesAfterNmi > 0;
+	uint32_t beforeNmi = snesCfg.PpuExtraScanlinesBeforeNmi;
+	uint32_t afterNmi = snesCfg.PpuExtraScanlinesAfterNmi;
+	if(_emu->GetRomInfo().Format == RomFormat::Gb) {
+		//Disable overclocking for SGB (does not work properly)
+		beforeNmi = 0;
+		afterNmi = 0;
+	}
 
-	_adjustedVblankEndScanline = _baseVblankEndScanline + snesCfg.PpuExtraScanlinesBeforeNmi;
-	_vblankEndScanline = _baseVblankEndScanline + snesCfg.PpuExtraScanlinesAfterNmi + snesCfg.PpuExtraScanlinesBeforeNmi;
+	_overclockEnabled = beforeNmi > 0 || afterNmi > 0;
+	_adjustedVblankEndScanline = _baseVblankEndScanline + beforeNmi;
+	_vblankEndScanline = _baseVblankEndScanline + afterNmi + beforeNmi;
 	_vblankStartScanline = _state.OverscanMode ? 240 : 225;
-	_nmiScanline = _vblankStartScanline + snesCfg.PpuExtraScanlinesBeforeNmi;
+	_nmiScanline = _vblankStartScanline + beforeNmi;
 }
 
 uint16_t SnesPpu::GetRealScanline()
@@ -628,6 +659,7 @@ void SnesPpu::FetchSpriteData()
 	if(_fetchSpriteStart == 0) {
 		memset(_spritePriorityCopy, 0xFF, sizeof(_spritePriorityCopy));
 
+		_orgSpriteCount = _spriteCount;
 		_spriteTileCount = 0;
 		_currentSprite.Index = 0xFF;
 
@@ -664,12 +696,16 @@ void SnesPpu::FetchSpriteData()
 			}
 		}
 	}
+
+	if(!_state.ForcedBlank && _fetchSpriteEnd >= 69 && _settings->GetSnesConfig().RemoveSpriteLimit) {
+		LoadExtraSprites();
+	}
 }
 
 void SnesPpu::FetchSpritePosition(uint8_t spriteIndex)
 {
-	static constexpr uint8_t oamWidth[16] = { 8,8,8,16,16,32,16,16, 16,32,64,32,64,64,32,32 };
-	static constexpr uint8_t oamHeight[16] = { 8,8,8,16,16,32,32,32, 16,32,64,32,64,64,64,32 };
+	static constexpr uint8_t oamWidth[16] = { 8, 8, 8, 16, 16, 32, 16, 16, 16, 32, 64, 32, 64, 64, 32, 32 };
+	static constexpr uint8_t oamHeight[16] = { 8, 8, 8, 16, 16, 32, 32, 32, 16, 32, 64, 32, 64, 64, 64, 32 };
 	static constexpr uint16_t sign[2] = { 0x0000, 0xFF00 };
 
 	uint8_t highTableValue = _oamRam[0x200 | (spriteIndex >> 2)] >> ((spriteIndex << 1) & 0x06);
@@ -704,7 +740,7 @@ void SnesPpu::FetchSpriteAttributes(uint16_t oamAddress)
 	_currentSprite.HorizontalMirror = (flags & 0x40) != 0;
 
 	_currentSprite.ColumnOffset--;
-	
+
 	uint8_t yOffset;
 	int rowOffset;
 	int yGap = (_scanline - _currentSprite.Y);
@@ -776,6 +812,43 @@ void SnesPpu::FetchSpriteTile(bool secondCycle)
 			}
 		}
 	}
+}
+
+void SnesPpu::LoadExtraSprites()
+{
+	//_timeOver can get set by calling FetchSpriteAttributes, keep a copy of its orignal value.
+	bool timeOver = _timeOver;
+
+	//Allow going over the 34 8px tile limit
+	if(!_spriteFetchingDone) {
+		FetchSpriteTile(false);
+		FetchSpriteTile(true);
+	}
+
+	while(_spriteCount > 0) {
+		uint8_t i = _spriteIndexes[_spriteCount - 1];
+		FetchSpritePosition(i);
+		FetchSpriteAttributes((i << 2) | 0x02);
+		FetchSpriteTile(false);
+		FetchSpriteTile(true);
+	}
+
+	if(_spriteFetchingDone && _orgSpriteCount == 32) {
+		//Allow going over the 32 sprite limit
+		uint8_t lastIndex = _spriteIndexes[31];
+		for(uint8_t i = lastIndex + 1; i < 0x80; i++) {
+			FetchSpritePosition(i);
+			if(_currentSprite.IsVisible(_scanline, _state.ObjInterlace)) {
+				while(_currentSprite.ColumnOffset > 0) {
+					FetchSpriteAttributes((i << 2) | 0x02);
+					FetchSpriteTile(false);
+					FetchSpriteTile(true);
+				}
+			}
+		}
+	}
+
+	_timeOver = timeOver;
 }
 
 void SnesPpu::RenderMode0()
@@ -877,10 +950,10 @@ void SnesPpu::RenderScanline()
 			FetchTileData();
 		}
 		_fetchBgStart = _fetchBgEnd + 1;
-	} 
+	}
 
 	//Render the scanline
-	if(!_skipRender && _drawStartX <= 255 && hPos > 22 && _scanline > 0) {
+	if(!_skipRender && _drawStartX <= 255 && hPos >= 22 && _scanline > 0) {
 		_drawEndX = std::min(hPos - 22, 255);
 
 		if(_state.ForcedBlank) {
@@ -907,7 +980,7 @@ void SnesPpu::RenderScanline()
 
 		_drawStartX = _drawEndX + 1;
 	}
-	
+
 	if(hPos >= 270 && !_spriteFetchingDone) {
 		//Fetch sprite data from OAM and calculated which CHR data needs to be loaded (between H=270 and H=337)
 		//Fetch sprite CHR data, as needed, between H=272 and H=339
@@ -983,7 +1056,7 @@ void SnesPpu::RenderTilemap()
 	uint16_t hScrollOriginal = _state.Layers[layerIndex].HScroll;
 	uint16_t hScroll = hiResMode ? (hScrollOriginal << 1) : hScrollOriginal;
 
-	TileData* tileData  = _layerData[layerIndex].Tiles;
+	TileData* tileData = _layerData[layerIndex].Tiles;
 
 	uint8_t mosaicCounter = applyMosaic ? (_drawStartX % _state.MosaicSize) : 0;
 
@@ -1010,7 +1083,7 @@ void SnesPpu::RenderTilemap()
 			uint8_t xOffset = ((x << 1) + 1 + hScroll) & 0x07;
 			uint8_t shift = hMirror ? xOffset : (7 - xOffset);
 			color = GetTilePixelColor<bpp>(chrData + chrDataOffset, shift);
-			
+
 			xOffset = ((x << 1) + hScroll) & 0x07;
 			shift = hMirror ? xOffset : (7 - xOffset);
 			hiresSubColor = GetTilePixelColor<bpp>(chrData + chrDataOffset, shift);
@@ -1072,8 +1145,7 @@ uint16_t SnesPpu::GetRgbColor(uint8_t paletteIndex, uint8_t colorIndex)
 		return (
 			((((colorIndex & 0x07) << 1) | (paletteIndex & 0x01)) << 1) |
 			(((colorIndex & 0x38) | ((paletteIndex & 0x02) << 1)) << 4) |
-			(((colorIndex & 0xC0) | ((paletteIndex & 0x04) << 3)) << 7)
-		);
+			(((colorIndex & 0xC0) | ((paletteIndex & 0x04) << 3)) << 7));
 	} else if constexpr(bpp == 8) {
 		//Ignore palette bits for 256-color layers
 		_state.InternalCgramAddress = basePaletteOffset + colorIndex;
@@ -1128,7 +1200,7 @@ void SnesPpu::RenderTilemapMode7()
 {
 	uint8_t mainWindowCount = _state.WindowMaskMain[layerIndex] ? (uint8_t)_state.Window[0].ActiveLayers[layerIndex] + (uint8_t)_state.Window[1].ActiveLayers[layerIndex] : 0;
 	uint8_t subWindowCount = _state.WindowMaskSub[layerIndex] ? (uint8_t)_state.Window[0].ActiveLayers[layerIndex] + (uint8_t)_state.Window[1].ActiveLayers[layerIndex] : 0;
-	
+
 	bool drawMain = (bool)(((_state.MainScreenLayers & _configVisibleLayers) >> layerIndex) & 0x01);
 	bool drawSub = (bool)(((_state.SubScreenLayers & _configVisibleLayers) >> layerIndex) & 0x01);
 
@@ -1152,30 +1224,28 @@ void SnesPpu::RenderTilemapMode7()
 	}
 	uint8_t mosaicCounter = applyMosaic ? (_drawStartX % _state.MosaicSize) : 0;
 
-	int32_t xValue = (
+	int32_t xValue =
 		((_state.Mode7.Matrix[0] * clip(hScroll - centerX)) & ~63) +
 		((_state.Mode7.Matrix[1] * realY) & ~63) +
 		((_state.Mode7.Matrix[1] * clip(vScroll - centerY)) & ~63) +
-		(centerX << 8)
-	);
+		(centerX << 8);
 
-	int32_t yValue = (
+	int32_t yValue =
 		((_state.Mode7.Matrix[2] * clip(hScroll - centerX)) & ~63) +
 		((_state.Mode7.Matrix[3] * realY) & ~63) +
 		((_state.Mode7.Matrix[3] * clip(vScroll - centerY)) & ~63) +
-		(centerY << 8)
-	);
+		(centerY << 8);
 
 	int16_t xStep = _state.Mode7.Matrix[0];
 	int16_t yStep = _state.Mode7.Matrix[2];
 	if(_state.Mode7.HorizontalMirroring) {
 		//Calculate the value at the end of the scanline, and then start going backwards
-		xValue += xStep * _drawEndX;
-		yValue += yStep * _drawEndX;
+		xValue += xStep * 255;
+		yValue += yStep * 255;
 		xStep = -xStep;
 		yStep = -yStep;
 	}
-	
+
 	if(_drawStartX == 0) {
 		//Keep start/end values - used by tilemap viewer
 		_debugMode7StartX = xValue;
@@ -1186,7 +1256,7 @@ void SnesPpu::RenderTilemapMode7()
 
 	xValue += xStep * _drawStartX;
 	yValue += yStep * _drawStartX;
-	
+
 	uint8_t pixelFlags = ((_state.ColorMathEnabled >> layerIndex) & 0x01) ? PixelFlags::AllowColorMath : 0;
 
 	for(int x = _drawStartX; x <= _drawEndX; x++) {
@@ -1245,10 +1315,10 @@ void SnesPpu::RenderTilemapMode7()
 			} else {
 				paletteColor = _cgram[colorIndex];
 			}
-			
+
 			if(drawMain && (_mainScreenFlags[x] & 0x0F) < priority && !ProcessMaskWindow<layerIndex>(mainWindowCount, x)) {
 				DrawMainPixel(x, paletteColor, priority | pixelFlags);
-			} 
+			}
 
 			if(drawSub && _subScreenPriority[x] < priority && !ProcessMaskWindow<layerIndex>(subWindowCount, x)) {
 				DrawSubPixel(x, paletteColor, priority);
@@ -1285,7 +1355,8 @@ void SnesPpu::ApplyColorMath()
 			//Keep original subscreen color, which is used to apply color math to the main screen after
 			uint16_t subPixel = _subScreenBuffer[x];
 			//Apply the color math based on the previous main pixel
-			uint16_t prevMainPixel = x > 0 ? _mainScreenBuffer[x - 1] : 0;
+			uint16_t prevMainPixel = x > 0 ? _prevMainPixel : 0;
+			_prevMainPixel = _mainScreenBuffer[x];
 			int prevX = x > 0 ? x - 1 : 0;
 			ApplyColorMathToPixel(_subScreenBuffer[x], prevMainPixel, prevX, isInsideWindow);
 
@@ -1299,7 +1370,7 @@ void SnesPpu::ApplyColorMath()
 	}
 }
 
-void SnesPpu::ApplyColorMathToPixel(uint16_t &pixelA, uint16_t pixelB, int x, bool isInsideWindow)
+void SnesPpu::ApplyColorMathToPixel(uint16_t& pixelA, uint16_t pixelB, int x, bool isInsideWindow)
 {
 	uint8_t halfShift = (uint8_t)_state.ColorMathHalveResult;
 
@@ -1384,7 +1455,7 @@ void SnesPpu::ApplyBrightness()
 {
 	if(_state.ScreenBrightness != 15) {
 		for(int x = _drawStartX; x <= _drawEndX; x++) {
-			uint16_t &pixel = (forMainScreen ? _mainScreenBuffer : _subScreenBuffer)[x];
+			uint16_t& pixel = (forMainScreen ? _mainScreenBuffer : _subScreenBuffer)[x];
 			uint16_t r = (pixel & 0x1F) * _state.ScreenBrightness / 15;
 			uint16_t g = ((pixel >> 5) & 0x1F) * _state.ScreenBrightness / 15;
 			uint16_t b = ((pixel >> 10) & 0x1F) * _state.ScreenBrightness / 15;
@@ -1399,7 +1470,7 @@ void SnesPpu::ConvertToHiRes()
 		return;
 	}
 
-	bool useHighResOutput = _useHighResOutput || IsDoubleWidth() || _state.ScreenInterlace;
+	bool useHighResOutput = _useHighResOutput || IsDoubleWidth() || _interlacedFrame;
 	if(!useHighResOutput || _useHighResOutput == useHighResOutput || _scanline >= _vblankStartScanline || _scanline == 0) {
 		return;
 	}
@@ -1434,8 +1505,7 @@ void SnesPpu::ApplyHiResMode()
 	if(!_useHighResOutput) {
 		memcpy(_currentBuffer + (scanline << 8) + _drawStartX, _mainScreenBuffer + _drawStartX, (_drawEndX - _drawStartX + 1) << 1);
 	} else {
-		_interlacedFrame |= _state.ScreenInterlace;
-		uint32_t screenY = _state.ScreenInterlace ? (_oddFrame ? ((scanline << 1) + 1) : (scanline << 1)) : (scanline << 1);
+		uint32_t screenY = (_interlacedFrame && _oddFrame) ? ((scanline << 1) + 1) : (scanline << 1);
 		uint32_t baseAddr = (screenY << 9);
 
 		if(IsDoubleWidth()) {
@@ -1451,13 +1521,20 @@ void SnesPpu::ApplyHiResMode()
 			}
 		}
 
-		if(!_state.ScreenInterlace) {
-			//Copy this line's content to the next line (between the current start & end bounds)
-			memcpy(
-				_currentBuffer + baseAddr + 512 + (_drawStartX << 1),
-				_currentBuffer + baseAddr + (_drawStartX << 1),
-				(_drawEndX - _drawStartX + 1) << 2
-			);
+		if(!_interlacedFrame || _settings->GetSnesConfig().DeinterlaceMode == SnesDeinterlaceMode::Bob || _settings->GetSnesConfig().DeinterlaceMode == SnesDeinterlaceMode::BobBlend) {
+			uint32_t len = (_drawEndX - _drawStartX + 1) << 2;
+			uint32_t src = baseAddr + (_drawStartX << 1);
+			uint32_t dst = src + 512;
+
+			if(_interlacedFrame && _oddFrame && _scanline == 1) {
+				//Copy scanline 1 to scanline 0 for bob deinterlacing to avoid a black scanline at the top
+				memcpy(_currentBuffer + src - 512, _currentBuffer + src, len);
+			}
+
+			if(screenY < 477) {
+				//Copy this line's content to the next line (between the current start & end bounds)
+				memcpy(_currentBuffer + dst, _currentBuffer + src, len);
+			}
 		}
 	}
 }
@@ -1466,7 +1543,7 @@ template<uint8_t layerIndex>
 bool SnesPpu::ProcessMaskWindow(uint8_t activeWindowCount, int x)
 {
 	switch(activeWindowCount) {
-		case 1: 
+		case 1:
 			if(_state.Window[0].ActiveLayers[layerIndex]) {
 				return _state.Window[0].PixelNeedsMasking<layerIndex>(x);
 			}
@@ -1475,8 +1552,8 @@ bool SnesPpu::ProcessMaskWindow(uint8_t activeWindowCount, int x)
 		case 2:
 			switch(_state.MaskLogic[layerIndex]) {
 				default:
-				case WindowMaskLogic::Or: return _state.Window[0].PixelNeedsMasking<layerIndex>(x) | _state.Window[1].PixelNeedsMasking<layerIndex>(x);
-				case WindowMaskLogic::And: return _state.Window[0].PixelNeedsMasking<layerIndex>(x) & _state.Window[1].PixelNeedsMasking<layerIndex>(x);
+				case WindowMaskLogic::Or: return _state.Window[0].PixelNeedsMasking<layerIndex>(x) || _state.Window[1].PixelNeedsMasking<layerIndex>(x);
+				case WindowMaskLogic::And: return _state.Window[0].PixelNeedsMasking<layerIndex>(x) && _state.Window[1].PixelNeedsMasking<layerIndex>(x);
 				case WindowMaskLogic::Xor: return _state.Window[0].PixelNeedsMasking<layerIndex>(x) ^ _state.Window[1].PixelNeedsMasking<layerIndex>(x);
 				case WindowMaskLogic::Xnor: return !(_state.Window[0].PixelNeedsMasking<layerIndex>(x) ^ _state.Window[1].PixelNeedsMasking<layerIndex>(x));
 			}
@@ -1519,6 +1596,9 @@ void SnesPpu::SendFrame()
 	_needFullFrame = false;
 
 	RenderedFrame frame(_currentBuffer, width, height, _useHighResOutput ? 0.5 : 1.0, _frameCount, _console->GetControlManager()->GetPortStates());
+	if(_interlacedFrame) {
+		frame.Flags = FrameFlags::Interlaced;
+	}
 	_emu->GetVideoDecoder()->UpdateFrame(frame, isRewinding, isRewinding);
 
 	if(!_skipRender) {
@@ -1535,13 +1615,40 @@ void SnesPpu::DebugSendFrame()
 	uint16_t width = _useHighResOutput ? 512 : 256;
 	uint16_t height = _useHighResOutput ? 478 : 239;
 
-	int lastDrawnPixel = _drawEndX * (_useHighResOutput ? 2 : 1);
+	int lastDrawnPixel = (_drawEndX + 1) * (_useHighResOutput ? 2 : 1);
 	int scanline = _overscanFrame ? ((int)_scanline - 1) : ((int)_scanline + 6);
+	int nextScanline = scanline + 1;
+	if(_useHighResOutput) {
+		scanline *= 2;
+		nextScanline *= 2;
+	}
 
-	int offset = std::max(0, lastDrawnPixel + 1 + scanline * width);
-	int pixelsToClear = width * height - offset;
-	if(pixelsToClear > 0) {
-		memset(_currentBuffer + offset, 0, pixelsToClear * sizeof(uint16_t));
+	if(scanline >= 0 && scanline < height) {
+		if(_interlacedFrame) {
+			if(_oddFrame) {
+				scanline++;
+			}
+
+			for(int i = scanline + 2; i < height; i += 2) {
+				memset(_currentBuffer + i * width, 0, width * sizeof(uint16_t));
+			}
+
+			int pixelsToClear = width - lastDrawnPixel;
+			if(pixelsToClear > 0) {
+				memset(_currentBuffer + (scanline + 1) * width - pixelsToClear, 0, pixelsToClear * sizeof(uint16_t));
+			}
+		} else {
+			if(nextScanline < height) {
+				memset(_currentBuffer + nextScanline * width, 0, (height - nextScanline) * width * sizeof(uint16_t));
+			}
+
+			if(lastDrawnPixel < width) {
+				memset(_currentBuffer + (scanline * width) + lastDrawnPixel, 0, (width - lastDrawnPixel) * sizeof(uint16_t));
+				if(_useHighResOutput) {
+					memset(_currentBuffer + ((scanline + 1) * width) + lastDrawnPixel, 0, (width - lastDrawnPixel) * sizeof(uint16_t));
+				}
+			}
+		}
 	}
 
 	RenderedFrame frame(_currentBuffer, width, height, _useHighResOutput ? 0.5 : 1.0, _frameCount);
@@ -1577,7 +1684,7 @@ void SnesPpu::FillInterlacedFrame()
 {
 	//Patch to make rewinding interlaced games look less glitchy (otherwise a half a frame's rows are wrong every 30 frames)
 	for(int i = 0; i < 478 / 2; i++) {
-		memcpy(_currentBuffer+(i*2+(_oddFrame^1))*512, _currentBuffer+(i*2+(_oddFrame))*512, 512*sizeof(uint16_t));
+		memcpy(_currentBuffer + (i * 2 + (_oddFrame ^ 1)) * 512, _currentBuffer + (i * 2 + (_oddFrame)) * 512, 512 * sizeof(uint16_t));
 	}
 }
 
@@ -1734,7 +1841,7 @@ uint8_t SnesPpu::Read(uint16_t addr)
 				LatchLocationValues();
 			}
 			break;
-			
+
 		case 0x2138: {
 			//OAMDATAREAD - Data for OAM read
 			//When trying to read/write during rendering, the internal address used by the PPU's sprite rendering is used
@@ -1747,7 +1854,7 @@ uint8_t SnesPpu::Read(uint16_t addr)
 				value = _oamRam[0x200 | (oamAddr & 0x1F)];
 				_emu->ProcessPpuRead<CpuType::Snes>(0x200 | (oamAddr & 0x1F), value, MemoryType::SnesSpriteRam);
 			}
-			
+
 			_state.InternalOamAddress = (_state.InternalOamAddress + 1) & 0x3FF;
 			_state.Ppu1OpenBus = value;
 			return value;
@@ -1780,11 +1887,11 @@ uint8_t SnesPpu::Read(uint16_t addr)
 		case 0x213B: {
 			//CGDATAREAD - CGRAM Data read
 			uint8_t value;
-			
+
 			//During rendering, reads to CGRAM end up returning the value a the address the PPU is currently reading
 			uint16_t cgAddr = CanAccessCgram() ? _state.CgramAddress : _state.InternalCgramAddress;
 
-			if(_state.CgramAddressLatch){
+			if(_state.CgramAddressLatch) {
 				value = ((_cgram[cgAddr] >> 8) & 0x7F) | (_state.Ppu2OpenBus & 0x80);
 				_emu->ProcessPpuRead<CpuType::Snes>((cgAddr << 1) + 1, value, MemoryType::SnesCgRam);
 				_state.CgramAddress++;
@@ -1793,7 +1900,7 @@ uint8_t SnesPpu::Read(uint16_t addr)
 				_emu->ProcessPpuRead<CpuType::Snes>(cgAddr << 1, value, MemoryType::SnesCgRam);
 			}
 			_state.CgramAddressLatch = !_state.CgramAddressLatch;
-			
+
 			_state.Ppu2OpenBus = value;
 			return value;
 		}
@@ -1832,12 +1939,12 @@ uint8_t SnesPpu::Read(uint16_t addr)
 
 		case 0x213E: {
 			//STAT77 - PPU Status Flag and Version
-			uint8_t value = (
+			uint8_t value =
 				(_timeOver ? 0x80 : 0) |
 				(_rangeOver ? 0x40 : 0) |
 				(_state.Ppu1OpenBus & 0x10) |
-				0x01 //PPU (5c77) chip version
-			);
+				0x01; //PPU (5c77) chip version
+
 			_state.Ppu1OpenBus = value;
 			return value;
 		}
@@ -1846,13 +1953,12 @@ uint8_t SnesPpu::Read(uint16_t addr)
 			//STAT78 - PPU Status Flag and Version
 			ProcessLocationLatchRequest();
 
-			uint8_t value = (
+			uint8_t value =
 				(_oddFrame ? 0x80 : 0) |
 				(_locationLatched ? 0x40 : 0) |
 				(_state.Ppu2OpenBus & 0x20) |
 				(_console->GetRegion() == ConsoleRegion::Pal ? 0x10 : 0) |
-				0x03 //PPU (5c78) chip version
-			);
+				0x03; //PPU (5c78) chip version
 
 			if(_regs->GetIoPortOutput() & 0x80) {
 				_locationLatched = false;
@@ -1870,7 +1976,7 @@ uint8_t SnesPpu::Read(uint16_t addr)
 			LogDebug("[Debug] Unimplemented register read: " + HexUtilities::ToHex(addr));
 			break;
 	}
-	
+
 	uint16_t reg = addr & 0x210F;
 	if((reg >= 0x2104 && reg <= 0x2106) || (reg >= 0x2108 && reg <= 0x210A)) {
 		//Registers matching $21x4-6 or $21x8-A (where x is 0-2) return the last value read from any of the PPU1 registers $2134-6, $2138-A, or $213E.
@@ -1917,24 +2023,24 @@ void SnesPpu::Write(uint32_t addr, uint8_t value)
 			//When trying to read/write during rendering, the internal address used by the PPU's sprite rendering is used
 			//This is approximated by _oamRenderAddress (but is not cycle accurate) - needed for Uniracers
 			uint16_t oamAddr = GetOamAddress();
-			
+
 			if(oamAddr < 512) {
 				if(oamAddr & 0x01) {
 					_emu->ProcessPpuWrite<CpuType::Snes>(oamAddr - 1, _oamWriteBuffer, MemoryType::SnesSpriteRam);
 					_oamRam[oamAddr - 1] = _oamWriteBuffer;
-	
+
 					_emu->ProcessPpuWrite<CpuType::Snes>(oamAddr, value, MemoryType::SnesSpriteRam);
 					_oamRam[oamAddr] = value;
 				} else {
 					_oamWriteBuffer = value;
 				}
-			} 
+			}
 
 			if(!_state.ForcedBlank && _scanline < _nmiScanline) {
 				//During rendering the high table is also written to when writing to OAM
 				oamAddr = 0x200 | ((oamAddr & 0x1F0) >> 4);
 			}
-			
+
 			if(oamAddr >= 512) {
 				uint16_t address = 0x200 | (oamAddr & 0x1F);
 				if((oamAddr & 0x01) == 0) {
@@ -1973,29 +2079,35 @@ void SnesPpu::Write(uint32_t addr, uint8_t value)
 			break;
 		}
 
-		case 0x2107: case 0x2108: case 0x2109: case 0x210A:
+		case 0x2107:
+		case 0x2108:
+		case 0x2109:
+		case 0x210A:
 			//BG 1-4 Tilemap Address and Size (BG1SC, BG2SC, BG3SC, BG4SC)
 			_state.Layers[addr - 0x2107].TilemapAddress = (value & 0x7C) << 8;
 			_state.Layers[addr - 0x2107].DoubleWidth = (value & 0x01) != 0;
 			_state.Layers[addr - 0x2107].DoubleHeight = (value & 0x02) != 0;
 			break;
 
-		case 0x210B: case 0x210C:
+		case 0x210B:
+		case 0x210C:
 			//BG1+2 / BG3+4 Chr Address (BG12NBA / BG34NBA)
 			_state.Layers[(addr - 0x210B) * 2].ChrAddress = (value & 0x07) << 12;
 			_state.Layers[(addr - 0x210B) * 2 + 1].ChrAddress = (value & 0x70) << 8;
 			break;
-		
+
 		case 0x210D:
 			//M7HOFS - Mode 7 BG Horizontal Scroll
 			//BG1HOFS - BG1 Horizontal Scroll
 			_state.Mode7.HScroll = ((value << 8) | (_state.Mode7.ValueLatch)) & 0x1FFF;
 			_state.Mode7.ValueLatch = value;
-			
+
 			//no break, keep executing to set the matching BG1 HScroll register, too
 			[[fallthrough]];
 
-		case 0x210F: case 0x2111: case 0x2113:
+		case 0x210F:
+		case 0x2111:
+		case 0x2113:
 			//BGXHOFS - BG1/2/3/4 Horizontal Scroll
 			_state.Layers[(addr - 0x210D) >> 1].HScroll = ((value << 8) | (_hvScrollLatchValue & ~0x07) | (_hScrollLatchValue & 0x07)) & 0x3FF;
 			_hvScrollLatchValue = value;
@@ -2007,11 +2119,13 @@ void SnesPpu::Write(uint32_t addr, uint8_t value)
 			//BG1VOFS - BG1 Vertical Scroll
 			_state.Mode7.VScroll = ((value << 8) | (_state.Mode7.ValueLatch)) & 0x1FFF;
 			_state.Mode7.ValueLatch = value;
-			
+
 			//no break, keep executing to set the matching BG1 HScroll register, too
 			[[fallthrough]];
 
-		case 0x2110: case 0x2112: case 0x2114:
+		case 0x2110:
+		case 0x2112:
+		case 0x2114:
 			//BGXVOFS - BG1/2/3/4 Vertical Scroll
 			_state.Layers[(addr - 0x210E) >> 1].VScroll = ((value << 8) | _hvScrollLatchValue) & 0x3FF;
 			_hvScrollLatchValue = value;
@@ -2022,9 +2136,11 @@ void SnesPpu::Write(uint32_t addr, uint8_t value)
 			switch(value & 0x03) {
 				case 0: _state.VramIncrementValue = 1; break;
 				case 1: _state.VramIncrementValue = 32; break;
-				
-				case 2: 
-				case 3: _state.VramIncrementValue = 128; break;
+
+				case 2:
+				case 3:
+					_state.VramIncrementValue = 128;
+					break;
 			}
 
 			_state.VramAddressRemapping = (value & 0x0C) >> 2;
@@ -2062,9 +2178,9 @@ void SnesPpu::Write(uint32_t addr, uint8_t value)
 			if(CanAccessVram()) {
 				//Only write the value if in vblank or forced blank (writes to VRAM outside vblank/forced blank are not allowed)
 				_emu->ProcessPpuWrite<CpuType::Snes>((GetVramAddress() << 1) + 1, value, MemoryType::SnesVideoRam);
-				_vram[GetVramAddress()] = (value << 8) | (_vram[GetVramAddress()] & 0xFF); 
+				_vram[GetVramAddress()] = (value << 8) | (_vram[GetVramAddress()] & 0xFF);
 			}
-			
+
 			//The VRAM address is incremented even outside of vblank/forced blank
 			if(_state.VramAddrIncrementOnSecondReg) {
 				_state.VramAddress = (_state.VramAddress + _state.VramIncrementValue) & 0x7FFF;
@@ -2079,12 +2195,15 @@ void SnesPpu::Write(uint32_t addr, uint8_t value)
 			_state.Mode7.VerticalMirroring = (value & 0x02) != 0;
 			break;
 
-		case 0x211B: case 0x211C: case 0x211D: case 0x211E:
+		case 0x211B:
+		case 0x211C:
+		case 0x211D:
+		case 0x211E:
 			//M7A/B/C/D - Mode 7 Matrix A/B/C/D (A/B are also used with $2134/6)
 			_state.Mode7.Matrix[addr - 0x211B] = (value << 8) | _state.Mode7.ValueLatch;
 			_state.Mode7.ValueLatch = value;
 			break;
-		
+
 		case 0x211F:
 			//M7X - Mode 7 Center X
 			_state.Mode7.CenterX = ((value << 8) | _state.Mode7.ValueLatch);
@@ -2103,7 +2222,7 @@ void SnesPpu::Write(uint32_t addr, uint8_t value)
 			_state.CgramAddressLatch = false;
 			break;
 
-		case 0x2122: 
+		case 0x2122:
 			//CGRAM Data write (CGDATA)
 			if(_state.CgramAddressLatch) {
 				//MSB ignores the 7th bit (colors are 15-bit only)
@@ -2142,7 +2261,7 @@ void SnesPpu::Write(uint32_t addr, uint8_t value)
 			//WH0 - Window 1 Left Position
 			_state.Window[0].Left = value;
 			break;
-		
+
 		case 0x2127:
 			//WH1 - Window 1 Right Position
 			_state.Window[0].Right = value;
@@ -2195,7 +2314,7 @@ void SnesPpu::Write(uint32_t addr, uint8_t value)
 				_state.WindowMaskSub[i] = ((value >> i) & 0x01) != 0;
 			}
 			break;
-		
+
 		case 0x2130:
 			//CGWSEL - Color Addition Select
 			_state.ColorMathClipMode = (ColorWindowMode)((value >> 6) & 0x03);
@@ -2211,7 +2330,7 @@ void SnesPpu::Write(uint32_t addr, uint8_t value)
 			_state.ColorMathHalveResult = (value & 0x40) != 0;
 			break;
 
-		case 0x2132: 
+		case 0x2132:
 			//COLDATA - Fixed Color Data
 			if(value & 0x80) { //B
 				_state.FixedColor = (_state.FixedColor & ~0x7C00) | ((value & 0x1F) << 10);
@@ -2250,61 +2369,188 @@ void SnesPpu::Write(uint32_t addr, uint8_t value)
 	}
 }
 
-void SnesPpu::Serialize(Serializer &s)
+void SnesPpu::Serialize(Serializer& s)
 {
-	SV(_state.ForcedBlank); SV(_state.ScreenBrightness); SV(_scanline); SV(_frameCount);  SV(_state.BgMode);
-	SV(_state.Mode1Bg3Priority); SV(_state.MainScreenLayers); SV(_state.SubScreenLayers); SV(_state.VramAddress); SV(_state.VramIncrementValue); SV(_state.VramAddressRemapping);
-	SV(_state.VramAddrIncrementOnSecondReg); SV(_state.VramReadBuffer); SV(_state.Ppu1OpenBus); SV(_state.Ppu2OpenBus); SV(_state.CgramAddress); SV(_state.MosaicSize); SV(_state.MosaicEnabled);
-	SV(_state.OamMode); SV(_state.OamBaseAddress); SV(_state.OamAddressOffset); SV(_state.OamRamAddress); SV(_state.EnableOamPriority);
-	SV(_oamWriteBuffer); SV(_timeOver); SV(_rangeOver); SV(_state.HiResMode); SV(_state.ScreenInterlace); SV(_state.ObjInterlace);
-	SV(_state.OverscanMode); SV(_state.DirectColorMode); SV(_state.ColorMathClipMode); SV(_state.ColorMathPreventMode); SV(_state.ColorMathAddSubscreen); SV(_state.ColorMathEnabled);
-	SV(_state.ColorMathSubtractMode); SV(_state.ColorMathHalveResult); SV(_state.FixedColor); SV(_hvScrollLatchValue); SV(_hScrollLatchValue); 
-	SV(_state.MaskLogic[0]); SV(_state.MaskLogic[1]); SV(_state.MaskLogic[2]); SV(_state.MaskLogic[3]); SV(_state.MaskLogic[4]); SV(_state.MaskLogic[5]);
-	SV(_state.WindowMaskMain[0]); SV(_state.WindowMaskMain[1]); SV(_state.WindowMaskMain[2]); SV(_state.WindowMaskMain[3]); SV(_state.WindowMaskMain[4]);
-	SV(_state.WindowMaskSub[0]); SV(_state.WindowMaskSub[1]); SV(_state.WindowMaskSub[2]); SV(_state.WindowMaskSub[3]); SV(_state.WindowMaskSub[4]);
-	SV(_state.Mode7.CenterX); SV(_state.Mode7.CenterY); SV(_state.ExtBgEnabled); SV(_state.Mode7.FillWithTile0); SV(_state.Mode7.HorizontalMirroring);
-	SV(_state.Mode7.HScroll); SV(_state.Mode7.LargeMap); SV(_state.Mode7.Matrix[0]); SV(_state.Mode7.Matrix[1]); SV(_state.Mode7.Matrix[2]); SV(_state.Mode7.Matrix[3]);
-	SV(_state.Mode7.ValueLatch); SV(_state.Mode7.VerticalMirroring); SV(_state.Mode7.VScroll);
-	SV(_state.CgramAddressLatch); SV(_state.CgramWriteBuffer);
+	SV(_state.ForcedBlank);
+	SV(_state.ScreenBrightness);
+	SV(_scanline);
+	SV(_frameCount);
+	SV(_state.BgMode);
+	SV(_state.Mode1Bg3Priority);
+	SV(_state.MainScreenLayers);
+	SV(_state.SubScreenLayers);
+	SV(_state.VramAddress);
+	SV(_state.VramIncrementValue);
+	SV(_state.VramAddressRemapping);
+	SV(_state.VramAddrIncrementOnSecondReg);
+	SV(_state.VramReadBuffer);
+	SV(_state.Ppu1OpenBus);
+	SV(_state.Ppu2OpenBus);
+	SV(_state.CgramAddress);
+	SV(_state.MosaicSize);
+	SV(_state.MosaicEnabled);
+	SV(_state.OamMode);
+	SV(_state.OamBaseAddress);
+	SV(_state.OamAddressOffset);
+	SV(_state.OamRamAddress);
+	SV(_state.EnableOamPriority);
+	SV(_oamWriteBuffer);
+	SV(_timeOver);
+	SV(_rangeOver);
+	SV(_state.HiResMode);
+	SV(_state.ScreenInterlace);
+	SV(_state.ObjInterlace);
+	SV(_state.OverscanMode);
+	SV(_state.DirectColorMode);
+	SV(_state.ColorMathClipMode);
+	SV(_state.ColorMathPreventMode);
+	SV(_state.ColorMathAddSubscreen);
+	SV(_state.ColorMathEnabled);
+	SV(_state.ColorMathSubtractMode);
+	SV(_state.ColorMathHalveResult);
+	SV(_state.FixedColor);
+	SV(_hvScrollLatchValue);
+	SV(_hScrollLatchValue);
+	SV(_state.MaskLogic[0]);
+	SV(_state.MaskLogic[1]);
+	SV(_state.MaskLogic[2]);
+	SV(_state.MaskLogic[3]);
+	SV(_state.MaskLogic[4]);
+	SV(_state.MaskLogic[5]);
+	SV(_state.WindowMaskMain[0]);
+	SV(_state.WindowMaskMain[1]);
+	SV(_state.WindowMaskMain[2]);
+	SV(_state.WindowMaskMain[3]);
+	SV(_state.WindowMaskMain[4]);
+	SV(_state.WindowMaskSub[0]);
+	SV(_state.WindowMaskSub[1]);
+	SV(_state.WindowMaskSub[2]);
+	SV(_state.WindowMaskSub[3]);
+	SV(_state.WindowMaskSub[4]);
+	SV(_state.Mode7.CenterX);
+	SV(_state.Mode7.CenterY);
+	SV(_state.ExtBgEnabled);
+	SV(_state.Mode7.FillWithTile0);
+	SV(_state.Mode7.HorizontalMirroring);
+	SV(_state.Mode7.HScroll);
+	SV(_state.Mode7.LargeMap);
+	SV(_state.Mode7.Matrix[0]);
+	SV(_state.Mode7.Matrix[1]);
+	SV(_state.Mode7.Matrix[2]);
+	SV(_state.Mode7.Matrix[3]);
+	SV(_state.Mode7.ValueLatch);
+	SV(_state.Mode7.VerticalMirroring);
+	SV(_state.Mode7.VScroll);
+	SV(_state.CgramAddressLatch);
+	SV(_state.CgramWriteBuffer);
 	SV(_state.InternalOamAddress);
 	SV(_state.InternalCgramAddress);
 
 	for(int i = 0; i < 4; i++) {
-		SVI(_state.Layers[i].ChrAddress); SVI(_state.Layers[i].DoubleHeight); SVI(_state.Layers[i].DoubleWidth); SVI(_state.Layers[i].HScroll);
-		SVI(_state.Layers[i].LargeTiles); SVI(_state.Layers[i].TilemapAddress); SVI(_state.Layers[i].VScroll);
+		SVI(_state.Layers[i].ChrAddress);
+		SVI(_state.Layers[i].DoubleHeight);
+		SVI(_state.Layers[i].DoubleWidth);
+		SVI(_state.Layers[i].HScroll);
+		SVI(_state.Layers[i].LargeTiles);
+		SVI(_state.Layers[i].TilemapAddress);
+		SVI(_state.Layers[i].VScroll);
 	}
 
 	for(int i = 0; i < 2; i++) {
-		SVI(_state.Window[i].ActiveLayers[0]); SVI(_state.Window[i].ActiveLayers[1]); SVI(_state.Window[i].ActiveLayers[2]); SVI(_state.Window[i].ActiveLayers[3]); SVI(_state.Window[i].ActiveLayers[4]); SVI(_state.Window[i].ActiveLayers[5]);
-		SVI(_state.Window[i].InvertedLayers[0]); SVI(_state.Window[i].InvertedLayers[1]); SVI(_state.Window[i].InvertedLayers[2]); SVI(_state.Window[i].InvertedLayers[3]); SVI(_state.Window[i].InvertedLayers[4]); SVI(_state.Window[i].InvertedLayers[5]);
-		SVI(_state.Window[i].Left); SVI(_state.Window[i].Right);
+		SVI(_state.Window[i].ActiveLayers[0]);
+		SVI(_state.Window[i].ActiveLayers[1]);
+		SVI(_state.Window[i].ActiveLayers[2]);
+		SVI(_state.Window[i].ActiveLayers[3]);
+		SVI(_state.Window[i].ActiveLayers[4]);
+		SVI(_state.Window[i].ActiveLayers[5]);
+		SVI(_state.Window[i].InvertedLayers[0]);
+		SVI(_state.Window[i].InvertedLayers[1]);
+		SVI(_state.Window[i].InvertedLayers[2]);
+		SVI(_state.Window[i].InvertedLayers[3]);
+		SVI(_state.Window[i].InvertedLayers[4]);
+		SVI(_state.Window[i].InvertedLayers[5]);
+		SVI(_state.Window[i].Left);
+		SVI(_state.Window[i].Right);
 	}
 
 	SVArray(_vram, SnesPpu::VideoRamSize >> 1);
 	SVArray(_oamRam, SnesPpu::SpriteRamSize);
 	SVArray(_cgram, SnesPpu::CgRamSize >> 1);
-	
+
 	if(s.GetFormat() != SerializeFormat::Map) {
 		//Hide these entries from the Lua API
-		SV(_horizontalLocation); SV(_horizontalLocToggle); SV(_verticalLocation); SV(_verticalLocationToggle); SV(_locationLatched);
-		SV(_oddFrame); SV(_vblankStartScanline);
-		SV(_nmiScanline); SV(_vblankEndScanline); SV(_adjustedVblankEndScanline); SV(_baseVblankEndScanline);
+		SV(_horizontalLocation);
+		SV(_horizontalLocToggle);
+		SV(_verticalLocation);
+		SV(_verticalLocationToggle);
+		SV(_locationLatched);
+		SV(_oddFrame);
+		SV(_vblankStartScanline);
+		SV(_nmiScanline);
+		SV(_vblankEndScanline);
+		SV(_adjustedVblankEndScanline);
+		SV(_baseVblankEndScanline);
 		SV(_overclockEnabled);
 
-		SV(_drawStartX); SV(_drawEndX);
+		SV(_drawStartX);
+		SV(_drawEndX);
 		SV(_mosaicScanlineCounter);
 
 		for(int i = 0; i < 33; i++) {
-			SVI(_layerData[0].Tiles[i].ChrData[0]); SVI(_layerData[0].Tiles[i].ChrData[1]); SVI(_layerData[0].Tiles[i].ChrData[2]); SVI(_layerData[0].Tiles[i].ChrData[3]);
-			SVI(_layerData[0].Tiles[i].TilemapData); SVI(_layerData[0].Tiles[i].VScroll);
-			SVI(_layerData[1].Tiles[i].ChrData[0]); SVI(_layerData[1].Tiles[i].ChrData[1]); SVI(_layerData[1].Tiles[i].ChrData[2]); SVI(_layerData[1].Tiles[i].ChrData[3]);
-			SVI(_layerData[1].Tiles[i].TilemapData); SVI(_layerData[1].Tiles[i].VScroll);
-			SVI(_layerData[2].Tiles[i].ChrData[0]); SVI(_layerData[2].Tiles[i].ChrData[1]); SVI(_layerData[2].Tiles[i].ChrData[2]); SVI(_layerData[2].Tiles[i].ChrData[3]);
-			SVI(_layerData[2].Tiles[i].TilemapData); SVI(_layerData[2].Tiles[i].VScroll);
-			SVI(_layerData[3].Tiles[i].ChrData[0]); SVI(_layerData[3].Tiles[i].ChrData[1]); SVI(_layerData[3].Tiles[i].ChrData[2]); SVI(_layerData[3].Tiles[i].ChrData[3]);
-			SVI(_layerData[3].Tiles[i].TilemapData); SVI(_layerData[3].Tiles[i].VScroll);
+			SVI(_layerData[0].Tiles[i].ChrData[0]);
+			SVI(_layerData[0].Tiles[i].ChrData[1]);
+			SVI(_layerData[0].Tiles[i].ChrData[2]);
+			SVI(_layerData[0].Tiles[i].ChrData[3]);
+			SVI(_layerData[0].Tiles[i].TilemapData);
+			SVI(_layerData[0].Tiles[i].VScroll);
+			SVI(_layerData[1].Tiles[i].ChrData[0]);
+			SVI(_layerData[1].Tiles[i].ChrData[1]);
+			SVI(_layerData[1].Tiles[i].ChrData[2]);
+			SVI(_layerData[1].Tiles[i].ChrData[3]);
+			SVI(_layerData[1].Tiles[i].TilemapData);
+			SVI(_layerData[1].Tiles[i].VScroll);
+			SVI(_layerData[2].Tiles[i].ChrData[0]);
+			SVI(_layerData[2].Tiles[i].ChrData[1]);
+			SVI(_layerData[2].Tiles[i].ChrData[2]);
+			SVI(_layerData[2].Tiles[i].ChrData[3]);
+			SVI(_layerData[2].Tiles[i].TilemapData);
+			SVI(_layerData[2].Tiles[i].VScroll);
+			SVI(_layerData[3].Tiles[i].ChrData[0]);
+			SVI(_layerData[3].Tiles[i].ChrData[1]);
+			SVI(_layerData[3].Tiles[i].ChrData[2]);
+			SVI(_layerData[3].Tiles[i].ChrData[3]);
+			SVI(_layerData[3].Tiles[i].TilemapData);
+			SVI(_layerData[3].Tiles[i].VScroll);
 		}
-		SV(_hOffset); SV(_vOffset); SV(_fetchBgStart); SV(_fetchBgEnd); SV(_fetchSpriteStart); SV(_fetchSpriteEnd);
+		SV(_hOffset);
+		SV(_vOffset);
+		SV(_fetchBgStart);
+		SV(_fetchBgEnd);
+
+		SV(_currentSprite.X);
+		SV(_currentSprite.Y);
+		SV(_currentSprite.Index);
+		SV(_currentSprite.Width);
+		SV(_currentSprite.Height);
+		SV(_currentSprite.HorizontalMirror);
+		SV(_currentSprite.Priority);
+		SV(_currentSprite.Palette);
+		SV(_currentSprite.ColumnOffset);
+		SV(_currentSprite.DrawX);
+		SV(_currentSprite.FetchAddress);
+		SV(_currentSprite.ChrData[0]);
+		SV(_currentSprite.ChrData[1]);
+		SV(_oamEvaluationIndex);
+		SV(_oamTimeIndex);
+		SV(_fetchSpriteStart);
+		SV(_fetchSpriteEnd);
+		SV(_spriteEvalStart);
+		SV(_spriteEvalEnd);
+		SV(_spriteFetchingDone);
+		SVArray(_spriteIndexes, 32);
+		SV(_spriteCount);
+		SV(_orgSpriteCount);
+		SV(_spriteTileCount);
 	}
 
 	if(!s.IsSaving() && _interlacedFrame && _emu->GetRewindManager()->IsRewinding()) {
@@ -2368,7 +2614,8 @@ void SnesPpu::RandomizeState()
 	switch(_settings->GetRandomValue(0x03)) {
 		case 0: _state.VramIncrementValue = 1; break;
 		case 1: _state.VramIncrementValue = 32; break;
-		case 2: case 3: _state.VramIncrementValue = 128; break;
+		case 2:
+		case 3: _state.VramIncrementValue = 128; break;
 	}
 
 	_state.VramAddressRemapping = _settings->GetRandomValue(0x03);

@@ -1,18 +1,18 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Data;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
+using Mesen.Config;
+using Mesen.Controls;
+using Mesen.Interop;
+using Mesen.Utilities;
+using Mesen.ViewModels;
 using System;
 using System.ComponentModel;
-using Avalonia.Data;
-using Mesen.Interop;
-using Mesen.ViewModels;
-using Avalonia.Layout;
-using Mesen.Utilities;
-using Mesen.Config;
 using System.Runtime.InteropServices;
-using Mesen.Controls;
 
 namespace Mesen.Windows
 {
@@ -43,9 +43,6 @@ namespace Mesen.Windows
 			DataContext = _model;
 
 			InitializeComponent();
-#if DEBUG
-			this.AttachDevTools();
-#endif
 
 			_renderer = this.GetControl<NativeRenderer>("Renderer");
 			_softwareRenderer = this.GetControl<SoftwareRendererView>("SoftwareRenderer");
@@ -118,7 +115,7 @@ namespace Mesen.Windows
 			_model.InitActions(this);
 			_timer.Start();
 			_mouseTimer.Start();
-			
+
 			_listener = new NotificationListener(forHistoryViewer: true);
 			_listener.OnNotification += OnNotification;
 		}
@@ -188,7 +185,7 @@ namespace Mesen.Windows
 				height = width / aspectRatio;
 			}
 
-			if(ConfigManager.Config.Video.FullscreenForceIntegerScale && VisualRoot is Window wnd && (wnd.WindowState == WindowState.FullScreen || wnd.WindowState == WindowState.Maximized)) {
+			if(ConfigManager.Config.Video.FullscreenForceIntegerScale && this.GetWindow() is Window wnd && (wnd.WindowState == WindowState.FullScreen || wnd.WindowState == WindowState.Maximized)) {
 				FrameInfo baseSize = EmuApi.GetBaseScreenSize();
 				double scale = height * dpiScale / baseSize.Height;
 				if(scale != Math.Floor(scale)) {

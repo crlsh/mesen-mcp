@@ -1,5 +1,7 @@
 #pragma once
 #include "pch.h"
+#include <iomanip>
+#include <sstream>
 
 class StringUtilities
 {
@@ -34,10 +36,8 @@ public:
 		size_t endIndex = str.find_last_not_of("\t\r\n ");
 		if(endIndex == string::npos) {
 			return "";
-		} else if(endIndex > 0) {
-			return str.substr(0, endIndex + 1);
 		}
-		return str;
+		return str.substr(0, endIndex + 1);
 	}
 
 	static string Trim(string str)
@@ -62,7 +62,7 @@ public:
 		memcpy(outBuffer, str.c_str(), std::min<uint32_t>((uint32_t)str.size(), maxSize));
 	}
 
-	static bool StartsWith(string& str, const char* content)
+	static bool StartsWith(const string& str, const char* content)
 	{
 		size_t length = strlen(content);
 		if(str.size() < length) {
@@ -77,7 +77,7 @@ public:
 		return true;
 	}
 
-	static bool EndsWith(string& str, const char* content)
+	static bool EndsWith(const string& str, const char* content)
 	{
 		size_t length = strlen(content);
 		if(str.size() < length) {
@@ -94,10 +94,10 @@ public:
 		return true;
 	}
 
-	static bool Contains(string& str, const char* content)
+	static bool Contains(const string& str, const char* content)
 	{
 		size_t length = strlen(content);
-		return std::search(str.begin(), str.end(), content, content+length) != str.end();
+		return std::search(str.begin(), str.end(), content, content + length) != str.end();
 	}
 
 	static string GetString(char* src, uint32_t maxLen)
@@ -112,6 +112,24 @@ public:
 				return string(src, src + i);
 			}
 		}
-		return string(src, src+maxLen);
+		return string(src, src + maxLen);
+	}
+
+	static string SizeToString(int32_t size)
+	{
+		if((size & 0x3FF) == 0) {
+			// Size is a multiple of 1 KiB, so print it in that form.
+			return std::to_string(size / 1024) + " KB";
+		} else {
+			// Size is not a multiple of 1 KiB, so just print the bytes.
+			return std::to_string(size) + " bytes";
+		}
+	}
+
+	static string ToString(double value, uint32_t precision)
+	{
+		std::ostringstream stream;
+		stream << std::fixed << std::setprecision(precision) << value;
+		return stream.str();
 	}
 };

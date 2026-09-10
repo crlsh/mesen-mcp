@@ -1,4 +1,4 @@
-#pragma once 
+#pragma once
 #include "pch.h"
 
 #include "Shared/SettingTypes.h"
@@ -54,10 +54,12 @@ private:
 	ConsoleRegion _region = ConsoleRegion::Auto;
 
 	bool _nextFrameOverclockDisabled = false;
-	
+
 	void UpdateRegion(bool forceUpdate = false);
 	void LoadHdPack(VirtualFile& romFile);
-	
+
+	template<bool isDualSystem> void InternalRunFrame();
+
 	void InitializeInputDevices(GameInputType inputType, GameSystem system);
 
 	void StartRecordingHdPack(HdPackBuilderOptions options);
@@ -84,6 +86,7 @@ public:
 	NesConfig& GetNesConfig();
 
 	void ProcessCpuClock();
+	uint8_t GetOpenBus();
 
 	Epsm* GetEpsm();
 
@@ -96,11 +99,13 @@ public:
 
 	// Inherited via IConsole
 	void Serialize(Serializer& s) override;
+	optional<SaveStateCompatInfo> ValidateSaveStateCompatibility(Serializer& s, ConsoleType stateConsoleType) override;
 	void Reset() override;
 	LoadRomResult LoadRom(VirtualFile& romFile) override;
 	void RunFrame() override;
 	BaseControlManager* GetControlManager() override;
 	double GetFps() override;
+	uint32_t GetFrameCount() override;
 	PpuFrameInfo GetPpuFrame() override;
 	ConsoleRegion GetRegion() override;
 	ConsoleType GetConsoleType() override;
@@ -114,7 +119,7 @@ public:
 	uint32_t GetMasterClockRate() override;
 
 	void SaveBattery() override;
-	
+
 	ShortcutState IsShortcutAllowed(EmulatorShortcut shortcut, uint32_t shortcutParam) override;
 
 	BaseVideoFilter* GetVideoFilter(bool getDefaultFilter) override;

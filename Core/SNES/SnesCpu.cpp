@@ -9,11 +9,10 @@
 #include "SNES/SnesDmaController.h"
 #include "SNES/SnesCpu.Instructions.h"
 #include "SNES/SnesCpu.Shared.h"
-#include "Shared/EventType.h"
 #include "Shared/MemoryOperationType.h"
 
 #ifndef DUMMYCPU
-SnesCpu::SnesCpu(SnesConsole *console)
+SnesCpu::SnesCpu(SnesConsole* console)
 {
 	_console = console;
 	_emu = console->GetEmulator();
@@ -78,6 +77,9 @@ void SnesCpu::ProcessHaltedState()
 		Idle();
 		if(over) {
 			_state.StopState = SnesCpuStopState::Running;
+#ifndef DUMMYCPU
+			_emu->ProcessEvent(EventType::HaltEnded, CpuType::Snes);
+#endif
 			CheckForInterrupts();
 		}
 	}
@@ -121,7 +123,7 @@ void SnesCpu::IdleTakeBranch()
 void SnesCpu::ProcessCpuCycle()
 {
 	_state.CycleCount++;
-	if(_dmaController->HasPendingTransfer()){
+	if(_dmaController->HasPendingTransfer()) {
 		_state.IrqLock = _dmaController->ProcessPendingTransfers();
 	} else {
 		_state.IrqLock = false;

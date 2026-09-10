@@ -1,10 +1,9 @@
 ﻿using Avalonia.Media;
+using CommunityToolkit.Mvvm.ComponentModel;
 using Mesen.Config;
 using Mesen.Debugger.Labels;
 using Mesen.Debugger.Utilities;
 using Mesen.Interop;
-using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -21,7 +20,7 @@ namespace Mesen.Debugger
 		private static Regex _arrayWatchRegex = new Regex(@"\[((\$[0-9A-Fa-f]+)|(\d+)|([@_a-zA-Z0-9]+))\s*,\s*(\d+)\]", RegexOptions.Compiled);
 
 		public event WatchChangedEventHandler? WatchChanged;
-		
+
 		private List<string> _watchEntries = new List<string>();
 		private CpuType _cpuType;
 
@@ -98,7 +97,7 @@ namespace Mesen.Debugger
 							newValue = FormatValue(result, style, byteLength);
 							break;
 
-						case EvalResultType.Boolean: newValue = result == 0 ? "false" : "true";	break;
+						case EvalResultType.Boolean: newValue = result == 0 ? "false" : "true"; break;
 						case EvalResultType.Invalid: newValue = "<invalid expression>"; forceHasChanged = true; break;
 						case EvalResultType.DivideBy0: newValue = "<division by zero>"; forceHasChanged = true; break;
 						case EvalResultType.OutOfScope: newValue = "<label out of scope>"; forceHasChanged = true; break;
@@ -307,11 +306,11 @@ namespace Mesen.Debugger
 		}
 	}
 
-	public class WatchValueInfo : ReactiveObject
+	public partial class WatchValueInfo : ObservableObject
 	{
-		[Reactive] public string Value { get; set; } = "";
-		[Reactive] public string Expression { get; set; } = "";
-		[Reactive] public bool IsChanged { get; set; } = false;
+		[ObservableProperty] public partial string Value { get; set; } = "";
+		[ObservableProperty] public partial string Expression { get; set; } = "";
+		[ObservableProperty] public partial bool IsChanged { get; set; } = false;
 		public Int64 NumericValue { get; set; } = -1;
 	}
 

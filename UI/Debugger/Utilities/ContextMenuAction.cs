@@ -2,6 +2,7 @@
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using CommunityToolkit.Mvvm.ComponentModel;
 using Mesen.Config;
 using Mesen.Config.Shortcuts;
 using Mesen.Controls;
@@ -9,17 +10,15 @@ using Mesen.Interop;
 using Mesen.Localization;
 using Mesen.Utilities;
 using Mesen.ViewModels;
-using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
 using System;
 using System.Collections.Generic;
-using System.Reactive;
+using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows.Input;
 
 namespace Mesen.Debugger.Utilities
 {
-	public abstract class BaseMenuAction : ViewModelBase, IDisposable
+	public abstract partial class BaseMenuAction : ViewModelBase, IDisposable
 	{
 		private static Dictionary<ActionType, string?> _iconCache = new();
 
@@ -31,7 +30,7 @@ namespace Mesen.Debugger.Utilities
 		static BaseMenuAction()
 		{
 			foreach(ActionType value in Enum.GetValues<ActionType>()) {
-				_iconCache[value] = value.GetAttribute<IconFileAttribute>()?.Icon;
+				_iconCache[value] = typeof(ActionType).GetMember(value.ToString())[0].GetCustomAttribute<IconFileAttribute>()?.Icon;
 			}
 		}
 
@@ -47,7 +46,7 @@ namespace Mesen.Debugger.Utilities
 				} else {
 					label = ResourceHelper.GetEnumText(ActionType);
 				}
-				
+
 				if(HintText != null) {
 					string hint = HintText();
 					if(!string.IsNullOrWhiteSpace(hint)) {
@@ -80,15 +79,13 @@ namespace Mesen.Debugger.Utilities
 			return null;
 		}
 
-		List<object>? _subActions;
+		private List<object>? _subActions;
 		public List<object>? SubActions
 		{
 			get => _subActions;
 			set
 			{
-				_subActions = value;
-
-				if(_subActions != null) {
+				if(value != null) {
 					Func<bool>? isEnabled = IsEnabled;
 
 					IsEnabled = () => {
@@ -96,7 +93,7 @@ namespace Mesen.Debugger.Utilities
 							return false;
 						}
 
-						foreach(object subAction in _subActions) {
+						foreach(object subAction in value) {
 							if(subAction is BaseMenuAction act) {
 								if(act.IsEnabled == null || act.IsEnabled()) {
 									return true;
@@ -106,7 +103,7 @@ namespace Mesen.Debugger.Utilities
 						return false;
 					};
 				}
-				this.RaiseAndSetIfChanged(ref _subActions, value);
+				SetProperty(ref _subActions, value);
 			}
 		}
 
@@ -114,20 +111,20 @@ namespace Mesen.Debugger.Utilities
 		public Func<bool>? IsEnabled { get; set; }
 		public Func<bool>? IsSelected { get; set; }
 		public Func<bool>? IsVisible { get; set; }
-		
+
 		public bool AllowedWhenHidden { get; set; }
 		public bool AlwaysShowLabel { get; set; }
 		public RoutingStrategies RoutingStrategy { get; set; } = RoutingStrategies.Bubble;
 
 		protected abstract string InternalShortcutText { get; }
 
-		[Reactive] public string ShortcutText { get; set; } = "";
-		[Reactive] public string ActionName { get; set; } = "";
-		[Reactive] public Image? ActionIcon { get; set; }
-		[Reactive] public bool Enabled { get; set; }
-		[Reactive] public bool Visible { get; set; }
-		
-		[Reactive] public string TooltipText { get; set; } = "";
+		[ObservableProperty] public partial string ShortcutText { get; set; } = "";
+		[ObservableProperty] public partial string ActionName { get; set; } = "";
+		[ObservableProperty] public partial Image? ActionIcon { get; set; }
+		[ObservableProperty] public partial bool Enabled { get; set; }
+		[ObservableProperty] public partial bool Visible { get; set; }
+
+		[ObservableProperty] public partial string TooltipText { get; set; } = "";
 
 		private static SimpleCommand _emptyCommand = new SimpleCommand(() => { });
 
@@ -313,7 +310,7 @@ namespace Mesen.Debugger.Utilities
 
 		[IconFile("EditLabel")]
 		EditLabel,
-		
+
 		[IconFile("EditLabel")]
 		EditComment,
 
@@ -330,7 +327,7 @@ namespace Mesen.Debugger.Utilities
 
 		[IconFile("CheatCode")]
 		MarkAsData,
-		
+
 		[IconFile("Help")]
 		MarkAsUnidentified,
 
@@ -364,7 +361,7 @@ namespace Mesen.Debugger.Utilities
 		WatchDecimalDisplay,
 		WatchHexDisplay,
 		WatchBinaryDisplay,
-		
+
 		RowDisplayFormat,
 		RowFormatBinary,
 		RowFormatHex8Bits,
@@ -408,10 +405,10 @@ namespace Mesen.Debugger.Utilities
 
 		[IconFile("StepInto")]
 		StepInto,
-		
+
 		[IconFile("StepOver")]
 		StepOver,
-		
+
 		[IconFile("StepOut")]
 		StepOut,
 
@@ -473,7 +470,7 @@ namespace Mesen.Debugger.Utilities
 
 		[IconFile("SaveFloppy")]
 		Save,
-		
+
 		SaveAs,
 
 		[IconFile("Exit")]
@@ -488,7 +485,7 @@ namespace Mesen.Debugger.Utilities
 		Refresh,
 		EnableAutoRefresh,
 		RefreshOnBreakPause,
-		
+
 		ZoomIn,
 		ZoomOut,
 
@@ -503,7 +500,7 @@ namespace Mesen.Debugger.Utilities
 
 		[IconFile("CheatCode")]
 		ViewInMemoryViewer,
-		
+
 		LoadTblFile,
 		ResetTblMappings,
 
@@ -526,7 +523,7 @@ namespace Mesen.Debugger.Utilities
 
 		[IconFile("LogWindow")]
 		OpenTraceLogger,
-		
+
 		[IconFile("Find")]
 		OpenMemorySearch,
 
@@ -544,7 +541,7 @@ namespace Mesen.Debugger.Utilities
 
 		[IconFile("Chip")]
 		OpenAssembler,
-		
+
 		[IconFile("LogWindow")]
 		OpenDebugLog,
 
@@ -590,7 +587,7 @@ namespace Mesen.Debugger.Utilities
 		Record,
 		[IconFile("MediaStop")]
 		Stop,
-		
+
 		[IconFile("Network")]
 		NetPlay,
 		Connect,
@@ -616,6 +613,8 @@ namespace Mesen.Debugger.Utilities
 
 		[IconFile("Camera")]
 		TakeScreenshot,
+		[IconFile("Export")]
+		SaveSpcFile,
 
 		[IconFile("Help")]
 		OnlineHelp,
@@ -696,7 +695,7 @@ namespace Mesen.Debugger.Utilities
 		InsertCoin3,
 		[IconFile("Coins")]
 		InsertCoin4,
-		
+
 		SaveState,
 		LoadState,
 		[IconFile("SplitView")]
@@ -707,7 +706,7 @@ namespace Mesen.Debugger.Utilities
 		LoadStateDialog,
 		[IconFile("Folder")]
 		LoadStateFromFile,
-		
+
 		RecentFiles,
 		LoadLastSession,
 
@@ -731,10 +730,10 @@ namespace Mesen.Debugger.Utilities
 
 		[IconFile("Breakpoint")]
 		SetBreakpoint,
-		
+
 		[IconFile("Close")]
 		RemoveBreakpoint,
-		
+
 		[IconFile("Breakpoint")]
 		EnableBreakpoint,
 
@@ -743,7 +742,7 @@ namespace Mesen.Debugger.Utilities
 
 		[IconFile("Edit")]
 		CodeWindowEditBreakpoint,
-		
+
 		CodeDataLogger,
 		[IconFile("ResetSettings")]
 		ResetCdl,
@@ -762,12 +761,12 @@ namespace Mesen.Debugger.Utilities
 		ResetWorkspace,
 		[IconFile("TabContent")]
 		Workspace,
-		
+
 		[IconFile("Import")]
 		ImportLabels,
 		[IconFile("Export")]
 		ExportLabels,
-		
+
 		[IconFile("Import")]
 		ImportWatchEntries,
 		[IconFile("Export")]
@@ -842,7 +841,7 @@ namespace Mesen.Debugger.Utilities
 
 		[IconFile("Settings")]
 		GameConfig,
-		
+
 		[IconFile("MediaStop")]
 		FreezeMemory,
 		[IconFile("MediaPlay")]
@@ -850,7 +849,7 @@ namespace Mesen.Debugger.Utilities
 
 		[IconFile("ResetSettings")]
 		ResetAccessCounters,
-		
+
 		[IconFile("HdPack")]
 		CopyToHdPackFormat,
 
@@ -867,7 +866,7 @@ namespace Mesen.Debugger.Utilities
 		FlipHorizontal,
 		[IconFile("FlipVertical")]
 		FlipVertical,
-		
+
 		[IconFile("TranslateLeft")]
 		TranslateLeft,
 		[IconFile("TranslateRight")]

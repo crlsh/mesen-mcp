@@ -7,7 +7,7 @@
 #include "Debugger/MemoryDumper.h"
 #include "Shared/SettingTypes.h"
 
-WsPpuTools::WsPpuTools(Debugger* debugger, Emulator *emu, WsConsole* console) : PpuTools(debugger, emu)
+WsPpuTools::WsPpuTools(Debugger* debugger, Emulator* emu, WsConsole* console) : PpuTools(debugger, emu)
 {
 	_console = console;
 }
@@ -17,14 +17,22 @@ FrameInfo WsPpuTools::GetTilemapSize(GetTilemapOptions options, BaseState& baseS
 	return { 256, 256 };
 }
 
+uint32_t WsPpuTools::GetBgColor(WsPpuState& state, uint8_t* vram)
+{
+	if(state.Mode == WsVideoMode::Monochrome) {
+		uint8_t bgBrightness = state.BwShades[state.BgColor & 0x07] ^ 0x0F;
+		return ColorUtilities::Bgr444ToArgb(bgBrightness | (bgBrightness << 4) | (bgBrightness << 8));
+	} else {
+		return ColorUtilities::Bgr444ToArgb(vram[0xFE00 | (state.BgColor << 1)] | ((vram[0xFE00 | (state.BgColor << 1) | 1] & 0x0F) << 8));
+	}
+}
+
 DebugTilemapInfo WsPpuTools::GetTilemap(GetTilemapOptions options, BaseState& baseState, BaseState& ppuToolsState, uint8_t* vram, uint32_t* palette, uint32_t* outBuffer)
 {
 	WsPpuState& state = (WsPpuState&)baseState;
 
 	uint16_t ramMask = state.Mode == WsVideoMode::Monochrome ? 0x3FFF : 0xFFFF;
 	uint16_t baseAddr = state.BgLayers[options.Layer].MapAddress;
-
-	std::fill(outBuffer, outBuffer + 256 * 256, 0xFFFFFFFF);
 
 	int tileSize = state.Mode >= WsVideoMode::Color4bpp ? 32 : 16;
 	int bpp = state.Mode >= WsVideoMode::Color4bpp ? 4 : 2;
@@ -37,6 +45,9 @@ DebugTilemapInfo WsPpuTools::GetTilemap(GetTilemapOptions options, BaseState& ba
 		palette = (uint32_t*)_grayscaleColorsBpp2;
 		colorMask = 0x03;
 	}
+
+	uint32_t bgColor = GetTilemapBackgroundColor(options.Background, GetBgColor(state, vram));
+	std::fill(outBuffer, outBuffer + 256 * 256, bgColor);
 
 	for(int row = 0; row < 32; row++) {
 		uint16_t baseOffset = baseAddr + row * 64;
@@ -134,7 +145,7 @@ DebugTilemapTileInfo WsPpuTools::GetTilemapTileInfo(uint32_t x, uint32_t y, uint
 	int column = x / 8;
 
 	uint16_t baseAddr = state.BgLayers[options.Layer].MapAddress;
-	
+
 	uint16_t tilemapAddr = (baseAddr + row * 64 + column * 2);
 
 	uint16_t tilemapData = vram[tilemapAddr] | (vram[tilemapAddr + 1] << 8);
@@ -151,7 +162,7 @@ DebugTilemapTileInfo WsPpuTools::GetTilemapTileInfo(uint32_t x, uint32_t y, uint
 	result.Width = 8;
 	result.TileMapAddress = tilemapAddr;
 	result.TileIndex = tileIndex;
-	result.TileAddress = tilesetAddr + tileIndex * tileSize;
+	result.AddAddress(tilesetAddr + tileIndex * tileSize);
 
 	result.PaletteIndex = tilePalette;
 	result.PaletteAddress = state.Mode >= WsVideoMode::Color2bpp ? (0xFE00 | (result.PaletteIndex << 4)) : (result.PaletteIndex << 2);
@@ -169,9 +180,9 @@ void WsPpuTools::GetSpritePreview(GetSpritePreviewOptions options, BaseState& ba
 	std::fill(outBuffer, outBuffer + 256 * WsConstants::ScreenHeight, bgColor);
 	std::fill(outBuffer + 256 * WsConstants::ScreenHeight, outBuffer + 256 * 256, darkBg);
 	for(int i = 0; i < WsConstants::ScreenHeight; i++) {
-		std::fill(outBuffer + WsConstants::ScreenWidth + i * 256, outBuffer + 256 +  i * 256 , darkBg);
+		std::fill(outBuffer + WsConstants::ScreenWidth + i * 256, outBuffer + 256 + i * 256, darkBg);
 	}
-	
+
 	int spriteCount = 128;
 	for(int i = spriteCount - 1; i >= 0; i--) {
 		DebugSpriteInfo& sprite = sprites[i];
@@ -248,19 +259,19 @@ void WsPpuTools::GetSpriteInfo(DebugSpriteInfo& sprite, uint32_t* spritePreview,
 
 	sprite.SpriteIndex = i;
 	sprite.UseExtendedVram = false;
-	sprite.RawY = oam[i*4 + 2];
-	sprite.RawX = oam[i*4 + 3];
+	sprite.RawY = oam[i * 4 + 2];
+	sprite.RawX = oam[i * 4 + 3];
 	sprite.Y = sprite.RawY;
 	sprite.X = sprite.RawX;
 	sprite.UseSecondTable = NullableBoolean::Undefined;
-	
-	uint8_t attributes = oam[i*4 + 1];
+
+	uint8_t attributes = oam[i * 4 + 1];
 	bool highPriority = attributes & 0x20;
 
 	bool vMirror = attributes & 0x80;
 	bool hMirror = attributes & 0x40;
 
-	uint16_t tileIndex = oam[i*4] | ((attributes & 0x01) << 8);
+	uint16_t tileIndex = oam[i * 4] | ((attributes & 0x01) << 8);
 	sprite.TileIndex = tileIndex;
 	uint8_t sprPalette = ((attributes >> 1) & 0x07);
 	int paletteSize = state.Mode == WsVideoMode::Monochrome ? 4 : 16;
@@ -268,7 +279,7 @@ void WsPpuTools::GetSpriteInfo(DebugSpriteInfo& sprite, uint32_t* spritePreview,
 	sprite.Palette = sprPalette;
 	sprite.PaletteAddress = (8 + sprPalette) * paletteSize;
 	sprite.Priority = highPriority ? DebugSpritePriority::Foreground : DebugSpritePriority::Background;
-	
+
 	sprite.Width = 8;
 	sprite.Height = 8;
 
@@ -349,7 +360,7 @@ DebugPaletteInfo WsPpuTools::GetPaletteInfo(GetPaletteInfoOptions options)
 		for(int i = 0; i < 64; i++) {
 			info.RawPalette[i] = state.BwPalettes[i];
 			uint8_t brightness = state.BwShades[state.BwPalettes[i]] ^ 0x0F;
-			info.RgbPalette[i] = ColorUtilities::Rgb444ToArgb(brightness | (brightness << 4) | (brightness << 8));
+			info.RgbPalette[i] = ColorUtilities::Bgr444ToArgb(brightness | (brightness << 4) | (brightness << 8));
 		}
 	} else {
 		info.ColorCount = 256;
@@ -364,7 +375,7 @@ DebugPaletteInfo WsPpuTools::GetPaletteInfo(GetPaletteInfoOptions options)
 
 		uint8_t* palette = _debugger->GetMemoryDumper()->GetMemoryBuffer(MemoryType::WsWorkRam);
 
-		info.RawFormat = RawPaletteFormat::Rgb444;
+		info.RawFormat = RawPaletteFormat::Bgr444;
 		for(int i = 0; i < 256; i++) {
 			int addr = 0xFE00 + i * 2;
 			info.RawPalette[i] = palette[addr] | ((palette[addr + 1] & 0x0F) << 8);

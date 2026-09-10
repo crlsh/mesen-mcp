@@ -1,16 +1,16 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
-using System;
+using Mesen.Config;
 using Mesen.Debugger.Controls;
+using Mesen.Debugger.Utilities;
 using Mesen.Debugger.ViewModels;
 using Mesen.Interop;
-using System.ComponentModel;
-using Avalonia.Interactivity;
-using Mesen.Debugger.Utilities;
-using Avalonia.Input;
-using Mesen.Config;
 using Mesen.Utilities;
+using System;
+using System.ComponentModel;
 
 namespace Mesen.Debugger.Windows
 {
@@ -25,9 +25,6 @@ namespace Mesen.Debugger.Windows
 		public PaletteViewerWindow(CpuType cpuType)
 		{
 			InitializeComponent();
-#if DEBUG
-			this.AttachDevTools();
-#endif
 
 			PaletteSelector palSelector = this.GetControl<PaletteSelector>("palSelector");
 			Border border = this.GetControl<Border>("selectorBorder");

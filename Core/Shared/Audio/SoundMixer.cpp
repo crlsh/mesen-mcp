@@ -29,7 +29,7 @@ SoundMixer::~SoundMixer()
 	delete[] _pitchAdjustBuffer;
 }
 
-void SoundMixer::RegisterAudioDevice(IAudioDevice *audioDevice)
+void SoundMixer::RegisterAudioDevice(IAudioDevice* audioDevice)
 {
 	_audioDevice = audioDevice;
 }
@@ -78,13 +78,14 @@ void SoundMixer::PlayAudioBuffer(int16_t* samples, uint32_t sampleCount, uint32_
 
 	uint32_t masterVolume = audioPlayer ? audioPlayer->GetVolume() : cfg.MasterVolume;
 	if(!isRecording) {
+		bool ffReduceVolume = cfg.ReduceSoundInFastForward && settings->CheckFlag(EmulationFlags::TurboOrRewind);
 		if(!audioPlayer && settings->CheckFlag(EmulationFlags::InBackground)) {
 			if(cfg.MuteSoundInBackground) {
 				masterVolume = 0;
-			} else if(cfg.ReduceSoundInBackground) {
+			} else if(cfg.ReduceSoundInBackground || ffReduceVolume) {
 				masterVolume = cfg.VolumeReduction == 100 ? 0 : masterVolume * (100 - cfg.VolumeReduction) / 100;
 			}
-		} else if(cfg.ReduceSoundInFastForward && settings->CheckFlag(EmulationFlags::TurboOrRewind)) {
+		} else if(ffReduceVolume) {
 			masterVolume = cfg.VolumeReduction == 100 ? 0 : masterVolume * (100 - cfg.VolumeReduction) / 100;
 		}
 	}
@@ -92,7 +93,7 @@ void SoundMixer::PlayAudioBuffer(int16_t* samples, uint32_t sampleCount, uint32_
 	_leftSample = samples[0];
 	_rightSample = samples[1];
 
-	int16_t *out = _sampleBuffer;
+	int16_t* out = _sampleBuffer;
 	uint32_t count = _resampler->Resample(samples, sampleCount, sourceRate, cfg.SampleRate, out, 0x10000 / 2);
 
 	uint32_t targetRate = (uint32_t)(cfg.SampleRate * _resampler->GetRateAdjustment());
@@ -171,12 +172,9 @@ void SoundMixer::ProcessEqualizer(int16_t* samples, uint32_t sampleCount, uint32
 		_equalizer.reset(new Equalizer());
 	}
 	vector<double> bandGains = {
-		cfg.Band1Gain, cfg.Band2Gain, cfg.Band3Gain, cfg.Band4Gain, cfg.Band5Gain,
-		cfg.Band6Gain, cfg.Band7Gain, cfg.Band8Gain, cfg.Band9Gain, cfg.Band10Gain,
-		cfg.Band11Gain, cfg.Band12Gain, cfg.Band13Gain, cfg.Band14Gain, cfg.Band15Gain,
-		cfg.Band16Gain, cfg.Band17Gain, cfg.Band18Gain, cfg.Band19Gain, cfg.Band20Gain
+		cfg.Band1Gain, cfg.Band2Gain, cfg.Band3Gain, cfg.Band4Gain, cfg.Band5Gain, cfg.Band6Gain, cfg.Band7Gain, cfg.Band8Gain, cfg.Band9Gain, cfg.Band10Gain, cfg.Band11Gain, cfg.Band12Gain, cfg.Band13Gain, cfg.Band14Gain, cfg.Band15Gain, cfg.Band16Gain, cfg.Band17Gain, cfg.Band18Gain, cfg.Band19Gain, cfg.Band20Gain
 	};
-	
+
 	_equalizer->UpdateEqualizers(bandGains, cfg.SampleRate);
 	_equalizer->ApplyEqualizer(sampleCount, samples);
 }
@@ -201,7 +199,7 @@ bool SoundMixer::IsRecording()
 	return _waveRecorder != nullptr;
 }
 
-void SoundMixer::GetLastSamples(int16_t &left, int16_t &right)
+void SoundMixer::GetLastSamples(int16_t& left, int16_t& right)
 {
 	left = _leftSample;
 	right = _rightSample;

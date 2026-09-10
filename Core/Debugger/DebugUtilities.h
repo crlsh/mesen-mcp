@@ -49,6 +49,17 @@ public:
 		throw std::runtime_error("Invalid CPU type");
 	}
 
+	static constexpr ByteCodeFormat GetByteCodeFormat(CpuType type)
+	{
+		switch(type) {
+			case CpuType::St018:
+			case CpuType::Gba:
+				return ByteCodeFormat::HexValue;
+		}
+
+		return ByteCodeFormat::Bytes;
+	}
+
 	static constexpr CpuType ToCpuType(MemoryType type)
 	{
 		switch(type) {
@@ -104,6 +115,8 @@ public:
 			case MemoryType::GbBootRom:
 			case MemoryType::GbVideoRam:
 			case MemoryType::GbSpriteRam:
+			case MemoryType::GbBgPaletteRam:
+			case MemoryType::GbObjPaletteRam:
 			case MemoryType::GameboyMemory:
 				return CpuType::Gameboy;
 
@@ -136,7 +149,7 @@ public:
 			case MemoryType::PceSpriteRam:
 			case MemoryType::PceSpriteRamVdc2:
 				return CpuType::Pce;
-		
+
 			case MemoryType::SmsMemory:
 			case MemoryType::SmsPrgRom:
 			case MemoryType::SmsWorkRam:
@@ -191,7 +204,7 @@ public:
 			case MemoryType::SnesCgRam:
 			case MemoryType::GbVideoRam:
 			case MemoryType::GbSpriteRam:
-			
+
 			case MemoryType::NesChrRam:
 			case MemoryType::NesChrRom:
 			case MemoryType::NesSpriteRam:
@@ -217,17 +230,16 @@ public:
 			case MemoryType::GbaPaletteRam:
 				return true;
 
-			default: 
+			default:
 				return false;
 		}
 	}
 
-	static constexpr bool IsRom(MemoryType memType)
+	static constexpr bool IsCartRom(MemoryType memType)
 	{
 		switch(memType) {
 			case MemoryType::SnesPrgRom:
 			case MemoryType::GbPrgRom:
-			case MemoryType::GbBootRom:
 			case MemoryType::NesPrgRom:
 			case MemoryType::NesChrRom:
 			case MemoryType::PcePrgRom:
@@ -235,14 +247,30 @@ public:
 			case MemoryType::DspProgramRom:
 			case MemoryType::St018PrgRom:
 			case MemoryType::St018DataRom:
-			case MemoryType::SufamiTurboFirmware:
 			case MemoryType::SufamiTurboSecondCart:
-			case MemoryType::SpcRom:
 			case MemoryType::SmsPrgRom:
-			case MemoryType::SmsBootRom:
 			case MemoryType::GbaPrgRom:
-			case MemoryType::GbaBootRom:
 			case MemoryType::WsPrgRom:
+				return true;
+
+			default:
+				return false;
+		}
+	}
+
+	static constexpr bool IsRom(MemoryType memType)
+	{
+		if(IsCartRom(memType)) {
+			return true;
+		}
+
+		switch(memType) {
+			case MemoryType::GbBootRom:
+			case MemoryType::SufamiTurboFirmware:
+			case MemoryType::SpcRom:
+			case MemoryType::SmsBootRom:
+			case MemoryType::GbaBootRom:
+			case MemoryType::WsBootRom:
 				return true;
 
 			default:

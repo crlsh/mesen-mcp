@@ -1,37 +1,37 @@
-using Avalonia.Controls;
-using Avalonia.Markup.Xaml;
-using Avalonia.Interactivity;
-using System;
-using Mesen.Config.Shortcuts;
-using System.Collections.Generic;
-using System.Linq;
-using Avalonia.Input;
-using System.ComponentModel;
-using Mesen.Interop;
-using Avalonia.Threading;
 using Avalonia;
-using Mesen.Config;
-using Mesen.Utilities;
-using Mesen.Localization;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
+using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
+using Mesen.Config;
+using Mesen.Config.Shortcuts;
+using Mesen.Interop;
+using Mesen.Localization;
+using Mesen.Utilities;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
+using System.Linq;
 
 namespace Mesen.Windows
 {
 	public class GetKeyWindow : MesenWindow
 	{
-		private DispatcherTimer _timer; 
-		
+		private DispatcherTimer _timer;
+
 		private List<UInt16> _prevScanCodes = new List<UInt16>();
-		private TextBlock lblCurrentKey;
+		private TextBlock _lblCurrentKey;
 		private bool _allowKeyboardOnly;
 
 		private Stopwatch _stopWatch = Stopwatch.StartNew();
-		private Dictionary<Key, long> _keyPressedStamp = new();
+		private Dictionary<UInt16, long> _keyPressedStamp = new();
 
 		public string HintLabel { get; }
 		public bool SingleKeyMode { get; set; } = false;
-		
+
 		public DbgShortKeys DbgShortcutKey { get; set; } = new DbgShortKeys();
 		public KeyCombination ShortcutKey { get; set; } = new KeyCombination();
 
@@ -48,8 +48,8 @@ namespace Mesen.Windows
 
 			InitializeComponent();
 
-			lblCurrentKey = this.GetControl<TextBlock>("lblCurrentKey");
-			
+			_lblCurrentKey = this.GetControl<TextBlock>("lblCurrentKey");
+
 			_timer = new DispatcherTimer(TimeSpan.FromMilliseconds(25), DispatcherPriority.Normal, (s, e) => UpdateKeyDisplay());
 			_timer.Start();
 
@@ -71,9 +71,10 @@ namespace Mesen.Windows
 
 		private void OnPreviewKeyDown(object? sender, KeyEventArgs e)
 		{
-			InputApi.SetKeyState((UInt16)e.Key, true);
+			UInt16 keyCode = e.GetKeyCode();
+			InputApi.SetKeyState(keyCode, true);
 			DbgShortcutKey = new DbgShortKeys(e.KeyModifiers, e.Key);
-			_keyPressedStamp[e.Key] = _stopWatch.ElapsedTicks;
+			_keyPressedStamp[keyCode] = _stopWatch.ElapsedTicks;
 			e.Handled = true;
 		}
 
@@ -81,20 +82,21 @@ namespace Mesen.Windows
 		{
 			e.Handled = true;
 
-			if(e.Key.IsSpecialKey() && !_allowKeyboardOnly && (!_keyPressedStamp.TryGetValue(e.Key, out long stamp) || ((_stopWatch.ElapsedTicks - stamp) * 1000 / Stopwatch.Frequency) < 10)) {
+			UInt16 keyCode = e.GetKeyCode();
+			if(e.IsSpecialKey() && !_allowKeyboardOnly && (!_keyPressedStamp.TryGetValue(keyCode, out long stamp) || ((_stopWatch.ElapsedTicks - stamp) * 1000 / Stopwatch.Frequency) < 10)) {
 				//Key up received without key down, or key pressed for less than 10 ms, pretend the key was pressed for 50ms
 				//Some special keys can behave this way (e.g printscreen)
 				DbgShortcutKey = new DbgShortKeys(e.KeyModifiers, e.Key);
-				InputApi.SetKeyState((UInt16)e.Key, true);
+				InputApi.SetKeyState(keyCode, true);
 				UpdateKeyDisplay();
-				DispatcherTimer.RunOnce(() => InputApi.SetKeyState((UInt16)e.Key, false), TimeSpan.FromMilliseconds(50), DispatcherPriority.MaxValue);
-				_keyPressedStamp.Remove(e.Key);
+				DispatcherTimer.RunOnce(() => InputApi.SetKeyState(keyCode, false), TimeSpan.FromMilliseconds(50), DispatcherPriority.MaxValue);
+				_keyPressedStamp.Remove(keyCode);
 				return;
 			}
 
-			_keyPressedStamp.Remove(e.Key);
+			_keyPressedStamp.Remove(keyCode);
 
-			InputApi.SetKeyState((UInt16)e.Key, false);
+			InputApi.SetKeyState(keyCode, false);
 			if(_allowKeyboardOnly) {
 				this.Close();
 			}
@@ -104,8 +106,8 @@ namespace Mesen.Windows
 		{
 			base.OnOpened(e);
 
-			lblCurrentKey.IsVisible = !this.SingleKeyMode;
-			lblCurrentKey.Height = this.SingleKeyMode ? 0 : 40;
+			_lblCurrentKey.IsVisible = !this.SingleKeyMode;
+			_lblCurrentKey.Height = this.SingleKeyMode ? 0 : 40;
 
 			ShortcutKey = new KeyCombination();
 			InputApi.UpdateInputDevices();

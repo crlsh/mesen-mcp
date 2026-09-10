@@ -1,7 +1,6 @@
-﻿using Mesen.Interop;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
+using Mesen.Interop;
 using Mesen.Utilities;
-using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
 using System;
 using System.Globalization;
 using System.Text;
@@ -36,7 +35,7 @@ namespace Mesen.Debugger.Labels
 
 			sb.Append(Address.ToString("X4"));
 			if(Length > 1) {
-				sb.Append("-" + (Address+Length-1).ToString("X4"));
+				sb.Append("-" + (Address + Length - 1).ToString("X4"));
 			}
 			sb.Append(":");
 

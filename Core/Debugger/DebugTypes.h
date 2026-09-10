@@ -73,7 +73,7 @@ struct CdlStatistics
 	uint32_t CodeBytes;
 	uint32_t DataBytes;
 	uint32_t TotalBytes;
-	
+
 	uint32_t JumpTargetCount;
 	uint32_t FunctionCount;
 
@@ -171,6 +171,15 @@ enum class TilemapHighlightMode
 	Writes
 };
 
+enum class TilemapBackground
+{
+	Default,
+	Transparent,
+	Black,
+	White,
+	Magenta,
+};
+
 struct GetTilemapOptions
 {
 	uint8_t Layer;
@@ -182,6 +191,7 @@ struct GetTilemapOptions
 	TilemapHighlightMode AttributeHighlightMode;
 
 	TilemapDisplayMode DisplayMode;
+	TilemapBackground Background;
 };
 
 enum class TileFormat
@@ -210,7 +220,8 @@ enum class TileLayout
 {
 	Normal,
 	SingleLine8x16,
-	SingleLine16x16
+	SingleLine16x16,
+	Vertical
 };
 
 enum class TileBackground
@@ -268,7 +279,8 @@ enum class StackFrameFlags
 {
 	None = 0,
 	Nmi = 1,
-	Irq = 2
+	Irq = 2,
+	Halt = 4
 };
 
 struct StackFrameInfo
@@ -316,7 +328,7 @@ enum class BreakSource
 	BreakOnWdm,
 	BreakOnStp,
 	BreakOnUninitMemoryRead,
-	
+
 	GbInvalidOamAccess,
 	GbInvalidVramAccess,
 	GbDisableLcdOutsideVblank,
@@ -336,7 +348,7 @@ enum class BreakSource
 	NesDmaInputRead,
 
 	PceBreakOnInvalidVramAddress,
-	
+
 	SmsNopLoad,
 
 	GbaInvalidOpCode,
@@ -389,7 +401,7 @@ struct StepRequest
 	int32_t CpuCycleStepCount = -1;
 	int32_t BreakScanline = INT32_MIN;
 	StepType Type = StepType::Step;
-	
+
 	bool HasRequest = false;
 
 	BreakType BreakNeeded = BreakType::None;
@@ -544,4 +556,10 @@ struct DebugControllerState
 	{
 		return A || B || X || Y || L || R || U || D || Up || Down || Left || Right || Select || Start;
 	}
+};
+
+enum class ByteCodeFormat
+{
+	Bytes,
+	HexValue
 };

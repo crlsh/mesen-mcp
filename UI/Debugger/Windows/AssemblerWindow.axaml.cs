@@ -41,9 +41,6 @@ namespace Mesen.Debugger.Windows
 		public AssemblerWindow(AssemblerWindowViewModel model)
 		{
 			InitializeComponent();
-#if DEBUG
-			this.AttachDevTools();
-#endif
 
 			UpdateSyntaxDef();
 			_highlighting = HighlightingLoader.Load(_syntaxDef, HighlightingManager.Instance);
@@ -57,15 +54,15 @@ namespace Mesen.Debugger.Windows
 				return;
 			}
 
-			_textEditor.TemplateApplied += textEditor_TemplateApplied;
-			_hexView.TemplateApplied += hexView_TemplateApplied;
-			
+			_textEditor.TemplateApplied += TextEditor_TemplateApplied;
+			_hexView.TemplateApplied += HexView_TemplateApplied;
+
 			_textEditor.SyntaxHighlighting = _highlighting;
 
 			_model.Config.LoadWindowSettings(this);
 			_model.InitMenu(this);
 		}
-		
+
 		private void UpdateSyntaxDef()
 		{
 			((XshdColor)_syntaxDef.Elements[0]).Foreground = new SimpleHighlightingBrush(ColorHelper.GetColor(ConfigManager.Config.Debug.Debugger.CodeCommentColor));
@@ -77,8 +74,7 @@ namespace Mesen.Debugger.Windows
 
 		public static void EditCode(CpuType cpuType, int address, string code, int byteCount)
 		{
-			AssemblerWindowViewModel model = new AssemblerWindowViewModel(cpuType);
-			model.InitEditCode(address, code, byteCount);
+			AssemblerWindowViewModel model = new AssemblerWindowViewModel(cpuType, address, code, byteCount);
 
 			DebugWindowManager.OpenDebugWindow(() => new AssemblerWindow(model));
 		}
@@ -96,29 +92,29 @@ namespace Mesen.Debugger.Windows
 			_model.Config.SaveWindowSettings(this);
 		}
 
-		private void hexView_TemplateApplied(object? sender, Avalonia.Controls.Primitives.TemplateAppliedEventArgs e)
+		private void HexView_TemplateApplied(object? sender, Avalonia.Controls.Primitives.TemplateAppliedEventArgs e)
 		{
-			_hexView.ScrollChanged += hexView_ScrollChanged;
+			_hexView.ScrollChanged += HexView_ScrollChanged;
 		}
 
-		private void textEditor_TemplateApplied(object? sender, Avalonia.Controls.Primitives.TemplateAppliedEventArgs e)
+		private void TextEditor_TemplateApplied(object? sender, Avalonia.Controls.Primitives.TemplateAppliedEventArgs e)
 		{
-			_textEditor.ScrollChanged += textEditor_ScrollChanged;
+			_textEditor.ScrollChanged += TextEditor_ScrollChanged;
 		}
 
-		private void hexView_ScrollChanged(object? sender, ScrollChangedEventArgs e)
+		private void HexView_ScrollChanged(object? sender, ScrollChangedEventArgs e)
 		{
 			_textEditor.VerticalScrollBarValue = _hexView.VerticalScrollBarValue;
 		}
 
-		private void textEditor_ScrollChanged(object? sender, ScrollChangedEventArgs e)
+		private void TextEditor_ScrollChanged(object? sender, ScrollChangedEventArgs e)
 		{
 			_hexView.VerticalScrollBarValue = _textEditor.VerticalScrollBarValue;
 		}
 
 		private void OnCellClick(DataBoxCell cell)
 		{
-			int lineNumber = (((AssemblerError?)cell.DataContext)?.LineNumber ?? 0)- 1;
+			int lineNumber = (((AssemblerError?)cell.DataContext)?.LineNumber ?? 0) - 1;
 			if(lineNumber >= 0) {
 				_textEditor.TextArea.Caret.Line = lineNumber;
 				_textEditor.TextArea.Caret.Column = 0;

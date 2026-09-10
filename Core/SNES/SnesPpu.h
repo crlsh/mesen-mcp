@@ -48,7 +48,7 @@ private:
 	uint8_t _spriteIndexes[32] = {};
 	uint8_t _spriteCount = 0;
 	uint8_t _spriteTileCount = 0;
-	bool _hasSpritePriority[4] = {};
+	uint8_t _orgSpriteCount = 0;
 
 	uint16_t _scanline = 0;
 	uint32_t _frameCount = 0;
@@ -67,13 +67,13 @@ private:
 
 	uint16_t _drawStartX = 0;
 	uint16_t _drawEndX = 0;
-	
-	uint16_t *_vram = nullptr;
+
+	uint16_t* _vram = nullptr;
 	uint16_t _cgram[SnesPpu::CgRamSize >> 1] = {};
 	uint8_t _oamRam[SnesPpu::SpriteRamSize] = {};
 
-	uint16_t *_outputBuffers[2] = {};
-	uint16_t *_currentBuffer = nullptr;
+	uint16_t* _outputBuffers[2] = {};
+	uint16_t* _currentBuffer = nullptr;
 	bool _useHighResOutput = false;
 	bool _interlacedFrame = false;
 	bool _overscanFrame = false;
@@ -87,7 +87,7 @@ private:
 	uint32_t _mosaicColor[4] = {};
 	uint32_t _mosaicPriority[4] = {};
 	uint16_t _mosaicScanlineCounter = 0;
-	
+
 	uint8_t _oamWriteBuffer = 0;
 
 	bool _timeOver = false;
@@ -104,6 +104,8 @@ private:
 	bool _latchRequest = false;
 	uint16_t _latchRequestX = 0;
 	uint16_t _latchRequestY = 0;
+
+	uint16_t _prevMainPixel = 0;
 
 	Timer _frameSkipTimer;
 	bool _skipRender = false;
@@ -122,6 +124,7 @@ private:
 	int32_t _debugMode7EndY = 0;
 
 	bool _needFullFrame = false;
+	bool _isRunAheadFrame = false;
 
 	void RenderSprites(const uint8_t priorities[4]);
 
@@ -131,6 +134,7 @@ private:
 	template<bool hiResMode, uint8_t bpp, bool secondTile = false>
 	void GetChrData(uint8_t layerIndex, uint8_t column, uint8_t plane);
 
+	uint16_t GetHvOffsetByteAddress(uint8_t columnIndex, bool forVertOffset);
 	void GetHorizontalOffsetByte(uint8_t columnIndex);
 	void GetVerticalOffsetByte(uint8_t columnIndex);
 	void FetchTileData();
@@ -148,7 +152,7 @@ private:
 
 	template<uint8_t layerIndex, uint8_t bpp, uint8_t normalPriority, uint8_t highPriority, uint16_t basePaletteOffset = 0>
 	__forceinline void RenderTilemap();
-	
+
 	template<uint8_t layerIndex, uint8_t bpp, uint8_t normalPriority, uint8_t highPriority, uint16_t basePaletteOffset, bool hiResMode>
 	__forceinline void RenderTilemap();
 
@@ -179,8 +183,8 @@ private:
 	__forceinline void DrawSubPixel(uint8_t x, uint16_t color, uint8_t priority);
 
 	void ApplyColorMath();
-	void ApplyColorMathToPixel(uint16_t &pixelA, uint16_t pixelB, int x, bool isInsideWindow);
-	
+	void ApplyColorMathToPixel(uint16_t& pixelA, uint16_t pixelB, int x, bool isInsideWindow);
+
 	template<bool forMainScreen>
 	void ApplyBrightness();
 
@@ -208,10 +212,11 @@ private:
 	__forceinline void FetchSpritePosition(uint8_t oamAddress);
 	void FetchSpriteAttributes(uint16_t oamAddress);
 	void FetchSpriteTile(bool secondCycle);
+	void LoadExtraSprites();
 
 	void UpdateOamAddress();
 	uint16_t GetOamAddress();
-	
+
 	void RandomizeState();
 
 	__noinline void DebugProcessMode7Overlay();
@@ -238,7 +243,7 @@ public:
 
 	SnesPpuState GetState();
 	SnesPpuState& GetStateRef();
-	void GetState(SnesPpuState &state, bool returnPartialState);
+	void GetState(SnesPpuState& state, bool returnPartialState);
 
 	bool ProcessEndOfScanline(uint16_t& hClock);
 	bool IsInOverclockedScanline();
@@ -254,13 +259,14 @@ public:
 	uint8_t* GetSpriteRam();
 
 	void DebugSendFrame();
+	void ProcessRunAheadFrameStart();
 
 	void SetLocationLatchRequest(uint16_t x, uint16_t y);
 	void ProcessLocationLatchRequest();
 	void LatchLocationValues();
-	
+
 	uint8_t Read(uint16_t addr);
 	void Write(uint32_t addr, uint8_t value);
 
-	void Serialize(Serializer &s) override;
+	void Serialize(Serializer& s) override;
 };

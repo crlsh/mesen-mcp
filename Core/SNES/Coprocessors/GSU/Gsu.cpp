@@ -8,6 +8,7 @@
 #include "SNES/BaseCartridge.h"
 #include "SNES/RamHandler.h"
 #include "Shared/Emulator.h"
+#include "Shared/EventType.h"
 #include "Shared/EmuSettings.h"
 #include "Shared/MessageManager.h"
 #include "Shared/BatteryManager.h"
@@ -15,7 +16,7 @@
 #include "Utilities/Serializer.h"
 #include "Shared/MemoryOperationType.h"
 
-Gsu::Gsu(SnesConsole *console, uint32_t gsuRamSize)
+Gsu::Gsu(SnesConsole* console, uint32_t gsuRamSize, bool isFx3)
 {
 	_emu = console->GetEmulator();
 	_console = console;
@@ -23,11 +24,10 @@ Gsu::Gsu(SnesConsole *console, uint32_t gsuRamSize)
 	_cpu = console->GetCpu();
 	_settings = _emu->GetSettings();
 
-	_clockMultiplier = std::max(1u, _settings->GetSnesConfig().GsuClockSpeed / 100);
-
-	_state = {};
+	_isFx3 = isFx3;
 	_state.ProgramReadBuffer = 0x01; //Run a NOP on first cycle
 
+	UpdateClockMultiplier();
 	_console->InitializeRam(_cache, 512);
 
 	_gsuRamSize = gsuRamSize;
@@ -37,38 +37,50 @@ Gsu::Gsu(SnesConsole *console, uint32_t gsuRamSize)
 
 	for(uint32_t i = 0; i < _gsuRamSize / 0x1000; i++) {
 		_gsuRamHandlers.push_back(unique_ptr<IMemoryHandler>(new RamHandler(_gsuRam, i * 0x1000, _gsuRamSize, MemoryType::GsuWorkRam)));
-		_gsuCpuRamHandlers.push_back(unique_ptr<IMemoryHandler>(new GsuRamHandler(_state, _gsuRamHandlers.back().get())));
+		_gsuCpuRamHandlers.push_back(unique_ptr<IMemoryHandler>(new GsuRamHandler(_state, isFx3, _gsuRamHandlers.back().get())));
 	}
-	
+
 	//CPU mappings
-	MemoryMappings *cpuMappings = _memoryManager->GetMemoryMappings();
-	vector<unique_ptr<IMemoryHandler>> &prgRomHandlers = _console->GetCartridge()->GetPrgRomHandlers();
-	for(unique_ptr<IMemoryHandler> &handler : prgRomHandlers) {
-		_gsuCpuRomHandlers.push_back(unique_ptr<IMemoryHandler>(new GsuRomHandler(_state, handler.get())));
+	MemoryMappings* cpuMappings = _memoryManager->GetMemoryMappings();
+	vector<unique_ptr<IMemoryHandler>>& prgRomHandlers = _console->GetCartridge()->GetPrgRomHandlers();
+	for(unique_ptr<IMemoryHandler>& handler : prgRomHandlers) {
+		_gsuCpuRomHandlers.push_back(unique_ptr<IMemoryHandler>(new GsuRomHandler(_state, isFx3, handler.get())));
 	}
 
 	//GSU registers in CPU memory space
-	cpuMappings->RegisterHandler(0x00, 0x3F, 0x3000, 0x3FFF, this);
-	cpuMappings->RegisterHandler(0x80, 0xBF, 0x3000, 0x3FFF, this);
+	_maxPrgRomBank = 0x5F;
+	uint8_t maxPrgRomBankH = 0xDF;
+	if(isFx3) {
+		cpuMappings->RegisterHandler(0x00, 0x3F, 0x7000, 0x7FFF, this);
+		cpuMappings->RegisterHandler(0x80, 0xBF, 0x7000, 0x7FFF, this);
+		_maxPrgRomBank = 0x6F;
+		maxPrgRomBankH = 0xFF;
+	} else {
+		cpuMappings->RegisterHandler(0x00, 0x3F, 0x3000, 0x3FFF, this);
+		cpuMappings->RegisterHandler(0x80, 0xBF, 0x3000, 0x3FFF, this);
 
-	for(int i = 0; i < 0x3F; i++) {
-		cpuMappings->RegisterHandler(i, i, 0x6000, 0x7FFF, _gsuCpuRamHandlers);
-		cpuMappings->RegisterHandler(i + 0x80, i + 0x80, 0x6000, 0x7FFF, _gsuCpuRamHandlers);
+		for(int i = 0; i < 0x3F; i++) {
+			cpuMappings->RegisterHandler(i, i, 0x6000, 0x7FFF, _gsuCpuRamHandlers);
+			cpuMappings->RegisterHandler(i + 0x80, i + 0x80, 0x6000, 0x7FFF, _gsuCpuRamHandlers);
+		}
 	}
+
 	cpuMappings->RegisterHandler(0x70, 0x71, 0x0000, 0xFFFF, _gsuCpuRamHandlers);
-	cpuMappings->RegisterHandler(0xF0, 0xF1, 0x0000, 0xFFFF, _gsuCpuRamHandlers);
+	if(!isFx3) {
+		cpuMappings->RegisterHandler(0xF0, 0xF1, 0x0000, 0xFFFF, _gsuCpuRamHandlers);
+	}
 
 	cpuMappings->RegisterHandler(0x00, 0x3F, 0x8000, 0xFFFF, _gsuCpuRomHandlers);
 	cpuMappings->RegisterHandler(0x80, 0xBF, 0x8000, 0xFFFF, _gsuCpuRomHandlers);
 
-	cpuMappings->RegisterHandler(0x40, 0x5F, 0x0000, 0xFFFF, _gsuCpuRomHandlers);
-	cpuMappings->RegisterHandler(0xC0, 0xDF, 0x0000, 0xFFFF, _gsuCpuRomHandlers);
+	cpuMappings->RegisterHandler(0x40, _maxPrgRomBank, 0x0000, 0xFFFF, _gsuCpuRomHandlers);
+	cpuMappings->RegisterHandler(0xC0, maxPrgRomBankH, 0x0000, 0xFFFF, _gsuCpuRomHandlers);
 
 	//GSU mappings
 	_mappings.RegisterHandler(0x00, 0x3F, 0x8000, 0xFFFF, prgRomHandlers);
 	_mappings.RegisterHandler(0x00, 0x3F, 0x0000, 0x7FFF, prgRomHandlers); //Mirror
 
-	_mappings.RegisterHandler(0x40, 0x5F, 0x0000, 0xFFFF, prgRomHandlers);
+	_mappings.RegisterHandler(0x40, _maxPrgRomBank, 0x0000, 0xFFFF, prgRomHandlers);
 	_mappings.RegisterHandler(0x70, 0x71, 0x0000, 0xFFFF, _gsuRamHandlers);
 }
 
@@ -79,7 +91,17 @@ Gsu::~Gsu()
 
 void Gsu::ProcessEndOfFrame()
 {
+	UpdateClockMultiplier();
+}
+
+void Gsu::UpdateClockMultiplier()
+{
 	uint8_t clockMultiplier = std::max(1u, _settings->GetSnesConfig().GsuClockSpeed / 100);
+	if(_isFx3) {
+		//The FX3 runs around 4x faster than the original GSU
+		clockMultiplier *= 4;
+	}
+
 	if(_clockMultiplier != clockMultiplier) {
 		_state.CycleCount = (uint64_t)((double)_state.CycleCount / _clockMultiplier * clockMultiplier);
 		_clockMultiplier = clockMultiplier;
@@ -103,6 +125,7 @@ void Gsu::Exec()
 {
 	uint8_t opCode = ReadOpCode();
 
+	// clang-format off
 	switch(opCode) {
 		case 0x00: STOP(); break;
 		case 0x01: NOP(); break;
@@ -228,6 +251,7 @@ void Gsu::Exec()
 			IwtLmSm(opCode & 0x0F);
 			break;
 	}
+	// clang-format on
 
 	if(_state.SFR.Running) {
 		_emu->ProcessInstruction<CpuType::Gsu>();
@@ -242,7 +266,7 @@ void Gsu::Exec()
 
 uint8_t Gsu::ReadGsu(uint32_t addr, MemoryOperationType opType)
 {
-	IMemoryHandler *handler = _mappings.GetHandler(addr);
+	IMemoryHandler* handler = _mappings.GetHandler(addr);
 	uint8_t value;
 	if(handler) {
 		value = handler->Read(addr);
@@ -271,20 +295,20 @@ void Gsu::WriteGsu(uint32_t addr, uint8_t value, MemoryOperationType opType)
 void Gsu::InitProgramCache(uint16_t cacheAddr)
 {
 	uint16_t dest = (cacheAddr & 0x01F0);
-	
-	if(_state.ProgramBank <= 0x5F) {
+
+	if(_state.ProgramBank <= _maxPrgRomBank) {
 		WaitRomOperation();
 		WaitForRomAccess();
 	} else {
 		WaitRamOperation();
 		WaitForRamAccess();
 	}
-	
+
 	uint32_t srcBaseAddr = (_state.ProgramBank << 16) + _state.CacheBase + dest;
 	for(int i = 0; i < 16; i++) {
 		_cache[dest + i] = ReadGsu(srcBaseAddr + i, MemoryOperationType::Read);
 	}
-	Step(_state.ClockSelect ? 5*16 : 6*16);
+	Step(_state.ClockSelect ? 5 * 16 : 6 * 16);
 
 	_cacheValid[cacheAddr >> 4] = true;
 }
@@ -312,12 +336,12 @@ uint8_t Gsu::ReadProgramByte(MemoryOperationType opType)
 		if(!_cacheValid[cacheAddr >> 4]) {
 			InitProgramCache(cacheAddr & 0xFFF0);
 		}
-		
+
 		Step(_state.ClockSelect ? 1 : 2);
 		_emu->ProcessMemoryRead<CpuType::Gsu>(_lastOpAddr, _cache[cacheAddr], opType);
 		return _cache[cacheAddr];
 	} else {
-		if(_state.ProgramBank <= 0x5F) {
+		if(_state.ProgramBank <= _maxPrgRomBank) {
 			WaitRomOperation();
 			WaitForRomAccess();
 		} else {
@@ -342,7 +366,7 @@ void Gsu::WriteDestReg(uint16_t value)
 void Gsu::WriteRegister(uint8_t reg, uint16_t value)
 {
 	_state.R[reg] = value;
-	
+
 	if(reg == 14) {
 		_state.SFR.RomReadPending = true;
 		_state.RomDelay = _state.ClockSelect ? 5 : 6;
@@ -387,6 +411,7 @@ void Gsu::WaitForRomAccess()
 	if(!_state.GsuRomAccess) {
 		_waitForRomAccess = true;
 		_stopped = true;
+		_emu->ProcessEvent(EventType::HaltStarted, CpuType::Gsu);
 	}
 }
 
@@ -395,12 +420,19 @@ void Gsu::WaitForRamAccess()
 	if(!_state.GsuRamAccess) {
 		_waitForRamAccess = true;
 		_stopped = true;
+		_emu->ProcessEvent(EventType::HaltStarted, CpuType::Gsu);
 	}
 }
 
 void Gsu::UpdateRunningState()
 {
+	bool stopped = _stopped;
 	_stopped = !_state.SFR.Running || _waitForRamAccess || _waitForRomAccess;
+	if(_stopped && !stopped) {
+		_emu->ProcessEvent(EventType::HaltEnded, CpuType::Gsu);
+	} else if(stopped && !_stopped) {
+		_emu->ProcessEvent(EventType::HaltStarted, CpuType::Gsu);
+	}
 }
 
 uint8_t Gsu::ReadRomBuffer()
@@ -425,33 +457,11 @@ void Gsu::WriteRam(uint16_t addr, uint8_t value)
 	_state.RamWriteValue = value;
 }
 
-void Gsu::Step(uint64_t cycles)
-{
-	_state.CycleCount += cycles;
-
-	if(_state.RomDelay) {
-		_state.RomDelay -= std::min<uint8_t>((uint8_t)cycles, _state.RomDelay);
-		if(_state.RomDelay == 0) {
-			WaitForRomAccess();
-			_state.RomReadBuffer = ReadGsu((_state.RomBank << 16) | _state.R[14], MemoryOperationType::Read);
-			_state.SFR.RomReadPending = false;
-		}
-	}
-
-	if(_state.RamDelay) {
-		_state.RamDelay -= std::min<uint8_t>((uint8_t)cycles, _state.RamDelay);
-		if(_state.RamDelay == 0) {
-			WaitForRamAccess();
-			WriteGsu(0x700000 | (_state.RamBank << 16) | _state.RamWriteAddress, _state.RamWriteValue, MemoryOperationType::Write);
-		}
-	}
-}
-
 void Gsu::Reset()
 {
 	_state = {};
 	_state.ProgramReadBuffer = 0x01; //Run a NOP on first cycle
-	
+
 	_console->InitializeRam(_cache, 512);
 	memset(_cacheValid, 0, sizeof(_cacheValid));
 	_waitForRomAccess = false;
@@ -463,11 +473,14 @@ void Gsu::Reset()
 uint8_t Gsu::Read(uint32_t addr)
 {
 	addr &= 0x33FF;
-	if(_state.SFR.Running && addr != 0x3030 && addr != 0x3031 && addr != 0x303B) {
+	if(_state.SFR.Running && addr != 0x3030 && addr != 0x3031 && addr != 0x303B && (_isFx3 && (addr != 0x301E && addr != 0x301F))) {
 		//"During GSU operation, only SFR, SCMR, and VCR may be accessed."
+		//Additionally, on the FX3, reading R15 while running is allowed.
+		//The FX3 hardware has no IRQs and the CPU needs to poll R15 to know when execution stops.
 		return 0;
 	}
 
+	// clang-format off
 	switch(addr) {
 		case 0x3000: case 0x3002: case 0x3004: case 0x3006: case 0x3008: case 0x300A: case 0x300C:case 0x300E:
 		case 0x3010: case 0x3012: case 0x3014: case 0x3016: case 0x3018: case 0x301A: case 0x301C:case 0x301E:
@@ -487,12 +500,13 @@ uint8_t Gsu::Read(uint32_t addr)
 
 		case 0x3034: return _state.ProgramBank;
 		case 0x3036: return _state.RomBank;
-		case 0x303B: return 0x04; //Version (can be 1 or 4?)
+		case 0x303B: return _isFx3 ? 0x52 : 0x04; //Version (can be 1 or 4?)
 		case 0x303C: return _state.RamBank;
 		case 0x303E: return (uint8_t)_state.CacheBase;
 		case 0x303F: return _state.CacheBase >> 8;
 	}
-	
+	// clang-format on
+
 	if(addr >= 0x3100 && addr <= 0x32FF) {
 		return _cache[(_state.CacheBase + (addr - 0x3100)) & 0x1FF];
 	}
@@ -512,6 +526,7 @@ void Gsu::Write(uint32_t addr, uint8_t value)
 	}
 
 	switch(addr) {
+			// clang-format off
 		case 0x3000: case 0x3002: case 0x3004: case 0x3006: case 0x3008: case 0x300A: case 0x300C: case 0x300E:
 		case 0x3010: case 0x3012: case 0x3014: case 0x3016: case 0x3018: case 0x301A: case 0x301C: case 0x301E:
 			_state.RegisterLatch = value;
@@ -531,6 +546,7 @@ void Gsu::Write(uint32_t addr, uint8_t value)
 			}
 			break;
 		}
+			// clang-format on
 
 		case 0x3030: {
 			bool running = _state.SFR.Running;
@@ -549,8 +565,12 @@ void Gsu::Write(uint32_t addr, uint8_t value)
 		}
 
 		case 0x3033: _state.BackupRamEnabled = (value & 0x01); break;
-		case 0x3034: _state.ProgramBank = (value & 0x7F); InvalidateCache(); break;
-		
+
+		case 0x3034:
+			_state.ProgramBank = (value & 0x7F);
+			InvalidateCache();
+			break;
+
 		case 0x3037:
 			_state.HighSpeedMode = (value & 0x20) != 0;
 			_state.IrqDisabled = (value & 0x80) != 0;
@@ -595,7 +615,7 @@ uint8_t Gsu::Peek(uint32_t addr)
 	return 0;
 }
 
-void Gsu::PeekBlock(uint32_t addr, uint8_t *output)
+void Gsu::PeekBlock(uint32_t addr, uint8_t* output)
 {
 	memset(output, 0, 0x1000);
 }
@@ -605,23 +625,65 @@ AddressInfo Gsu::GetAbsoluteAddress(uint32_t address)
 	return { -1, MemoryType::None };
 }
 
-void Gsu::Serialize(Serializer &s)
+void Gsu::Serialize(Serializer& s)
 {
-	SV(_state.CycleCount); SV(_state.RegisterLatch); SV(_state.ProgramBank); SV(_state.RomBank); SV(_state.RamBank); SV(_state.IrqDisabled);
-	SV(_state.HighSpeedMode); SV(_state.ClockSelect); SV(_state.BackupRamEnabled); SV(_state.ScreenBase); SV(_state.ColorGradient); SV(_state.PlotBpp);
-	SV(_state.ScreenHeight); SV(_state.GsuRamAccess); SV(_state.GsuRomAccess); SV(_state.CacheBase); SV(_state.PlotTransparent); SV(_state.PlotDither);
-	SV(_state.ColorHighNibble); SV(_state.ColorFreezeHigh); SV(_state.ObjMode); SV(_state.ColorReg); SV(_state.SrcReg); SV(_state.DestReg);
-	SV(_state.RomReadBuffer); SV(_state.RomDelay); SV(_state.ProgramReadBuffer); SV(_state.RamWriteAddress); SV(_state.RamWriteValue); SV(_state.RamDelay);
-	SV(_state.RamAddress); SV(_state.PrimaryCache.X); SV(_state.PrimaryCache.Y); SV(_state.PrimaryCache.ValidBits); SV(_state.SecondaryCache.X);
-	SV(_state.SecondaryCache.Y); SV(_state.SecondaryCache.ValidBits);
-	SV(_state.SFR.Alt1); SV(_state.SFR.Alt2); SV(_state.SFR.Carry); SV(_state.SFR.ImmHigh); SV(_state.SFR.ImmLow); SV(_state.SFR.Irq); SV(_state.SFR.Overflow);
-	SV(_state.SFR.Prefix); SV(_state.SFR.RomReadPending); SV(_state.SFR.Running); SV(_state.SFR.Sign); SV(_state.SFR.Zero);
+	SV(_state.CycleCount);
+	SV(_state.RegisterLatch);
+	SV(_state.ProgramBank);
+	SV(_state.RomBank);
+	SV(_state.RamBank);
+	SV(_state.IrqDisabled);
+	SV(_state.HighSpeedMode);
+	SV(_state.ClockSelect);
+	SV(_state.BackupRamEnabled);
+	SV(_state.ScreenBase);
+	SV(_state.ColorGradient);
+	SV(_state.PlotBpp);
+	SV(_state.ScreenHeight);
+	SV(_state.GsuRamAccess);
+	SV(_state.GsuRomAccess);
+	SV(_state.CacheBase);
+	SV(_state.PlotTransparent);
+	SV(_state.PlotDither);
+	SV(_state.ColorHighNibble);
+	SV(_state.ColorFreezeHigh);
+	SV(_state.ObjMode);
+	SV(_state.ColorReg);
+	SV(_state.SrcReg);
+	SV(_state.DestReg);
+	SV(_state.RomReadBuffer);
+	SV(_state.RomDelay);
+	SV(_state.ProgramReadBuffer);
+	SV(_state.RamWriteAddress);
+	SV(_state.RamWriteValue);
+	SV(_state.RamDelay);
+	SV(_state.RamAddress);
+	SV(_state.PrimaryCache.X);
+	SV(_state.PrimaryCache.Y);
+	SV(_state.PrimaryCache.ValidBits);
+	SV(_state.SecondaryCache.X);
+	SV(_state.SecondaryCache.Y);
+	SV(_state.SecondaryCache.ValidBits);
+	SV(_state.SFR.Alt1);
+	SV(_state.SFR.Alt2);
+	SV(_state.SFR.Carry);
+	SV(_state.SFR.ImmHigh);
+	SV(_state.SFR.ImmLow);
+	SV(_state.SFR.Irq);
+	SV(_state.SFR.Overflow);
+	SV(_state.SFR.Prefix);
+	SV(_state.SFR.RomReadPending);
+	SV(_state.SFR.Running);
+	SV(_state.SFR.Sign);
+	SV(_state.SFR.Zero);
 
 	SVArray(_state.R, 16);
 	SVArray(_state.PrimaryCache.Pixels, 8);
 	SVArray(_state.SecondaryCache.Pixels, 8);
 
-	SV(_waitForRamAccess); SV(_waitForRomAccess); SV(_stopped);
+	SV(_waitForRamAccess);
+	SV(_waitForRomAccess);
+	SV(_stopped);
 	SVArray(_cacheValid, 32);
 	SVArray(_cache, 512);
 	SVArray(_gsuRam, _gsuRamSize);
@@ -656,7 +718,7 @@ void Gsu::DebugSetProgramCounter(uint32_t addr)
 {
 	_state.ProgramBank = (addr >> 16) & 0xFF;
 	_state.R[15] = addr & 0xFFFF;
-	
+
 	_lastOpAddr = addr & 0xFFFFFF;
 	IMemoryHandler* handler = _mappings.GetHandler(_lastOpAddr);
 	_state.ProgramReadBuffer = handler ? handler->Read(_lastOpAddr) : 0;

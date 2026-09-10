@@ -11,7 +11,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Reactive.Disposables;
 
 namespace Mesen.Debugger.Controls
 {
@@ -116,7 +115,7 @@ namespace Mesen.Debugger.Controls
 		private Dictionary<CodeLineData, List<TextFragment>> _textFragments = new();
 		private Point _previousPointerPos;
 		private CodeSegmentInfo? _prevPointerOverSegment = null;
-		private CompositeDisposable _disposables = new();
+		private List<IDisposable> _disposables = new();
 
 		static DisassemblyViewer()
 		{
@@ -138,14 +137,19 @@ namespace Mesen.Debugger.Controls
 		protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
 		{
 			base.OnAttachedToVisualTree(e);
-			_disposables.Add(FontSizeProperty.Changed.Subscribe(_ => InitFontAndLetterSize()));
-			_disposables.Add(FontFamilyProperty.Changed.Subscribe(_ => InitFontAndLetterSize()));
-			_disposables.Add(BoundsProperty.Changed.Subscribe(_ => InitFontAndLetterSize()));
+			this.ObserveProp(FontSizeProperty, _ => InitFontAndLetterSize());
+			this.ObserveProp(FontFamilyProperty, _ => InitFontAndLetterSize());
+			this.ObserveProp(BoundsProperty, _ => InitFontAndLetterSize());
+
+			InitFontAndLetterSize();
 		}
 
 		protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
 		{
-			_disposables.Dispose();
+			foreach(IDisposable disposable in _disposables) {
+				disposable.Dispose();
+			}
+			_disposables.Clear();
 			base.OnDetachedFromVisualTree(e);
 		}
 
@@ -270,7 +274,7 @@ namespace Mesen.Debugger.Controls
 
 			double symbolMargin = Math.Floor(LetterSize.Width * 2.5);
 			double addressMargin = Math.Floor(LetterSize.Width * addressMaxCharCount) + 9;
-			double byteCodeMargin = Math.Floor(LetterSize.Width * (3 * styleProvider.ByteCodeSize));
+			double byteCodeMargin = Math.Floor(LetterSize.Width * (styleProvider.ByteCodeStringLength + 1));
 			double codeIndent = Math.Floor(LetterSize.Width * 2) + 0.5;
 
 			//Draw margin (symbol + address)
@@ -326,7 +330,7 @@ namespace Mesen.Debugger.Controls
 
 				if(showByteCode) {
 					//Draw byte code
-					text = FormatText(line.GetByteCode(styleProvider.ByteCodeSize), ColorHelper.GetBrush(Colors.Gray));
+					text = FormatText(line.GetByteCode(styleProvider.ByteCodeStringLength), ColorHelper.GetBrush(Colors.Gray));
 					context.DrawText(text, new Point(x + LetterSize.Width / 2, y));
 					x += byteCodeMargin;
 				}
@@ -364,7 +368,7 @@ namespace Mesen.Debugger.Controls
 					}
 				} else {
 					using(var clip = context.PushClip(new Rect(x, 0, Bounds.Width, Bounds.Height))) {
-						using(var translation = context.PushTransform(Matrix.CreateTranslation(-HorizontalScrollPosition*10, 0))) {
+						using(var translation = context.PushTransform(Matrix.CreateTranslation(-HorizontalScrollPosition * 10, 0))) {
 							if(lineStyle.TextBgColor.HasValue || lineStyle.OutlineColor.HasValue) {
 								text = FormatText(GetHighlightedText(line, lineParts, out double leftMargin));
 
@@ -545,10 +549,10 @@ namespace Mesen.Debugger.Controls
 
 					if(lineStyle.Symbol.HasFlag(LineSymbol.Forbid) || lineStyle.Symbol.HasFlag(LineSymbol.ForbidDotted)) {
 						p = new Pen(lineStyle.SymbolColor.Value.ToUInt32(), 1, dashStyle);
-						double xPos = LetterSize.Height / 2 - (Math.Cos(Math.PI / 4) * LetterSize.Height/2);
-						double yPos = LetterSize.Height / 2 - (Math.Sin(Math.PI / 4) * LetterSize.Height/2);
-						double xPos2 = LetterSize.Height / 2 + (Math.Cos(Math.PI / 4) * LetterSize.Height/2);
-						double yPos2 = LetterSize.Height / 2 + (Math.Sin(Math.PI / 4) * LetterSize.Height/2);
+						double xPos = LetterSize.Height / 2 - (Math.Cos(Math.PI / 4) * LetterSize.Height / 2);
+						double yPos = LetterSize.Height / 2 - (Math.Sin(Math.PI / 4) * LetterSize.Height / 2);
+						double xPos2 = LetterSize.Height / 2 + (Math.Cos(Math.PI / 4) * LetterSize.Height / 2);
+						double yPos2 = LetterSize.Height / 2 + (Math.Sin(Math.PI / 4) * LetterSize.Height / 2);
 						context.DrawLine(p, new Point(xPos, yPos), new Point(xPos2, yPos2));
 					}
 
@@ -658,7 +662,7 @@ namespace Mesen.Debugger.Controls
 	public interface ILineStyleProvider
 	{
 		int AddressSize { get; }
-		int ByteCodeSize { get; }
+		int ByteCodeStringLength { get; }
 
 		LineProperties GetLineStyle(CodeLineData lineData, int lineIndex);
 

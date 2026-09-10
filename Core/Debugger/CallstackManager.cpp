@@ -15,7 +15,7 @@ CallstackManager::~CallstackManager()
 {
 }
 
-void CallstackManager::Push(AddressInfo &src, uint32_t srcAddr, AddressInfo& dest, uint32_t destAddr, AddressInfo& ret, uint32_t returnAddress, uint32_t returnStackPointer, StackFrameFlags flags)
+void CallstackManager::Push(AddressInfo& src, uint32_t srcAddr, AddressInfo& dest, uint32_t destAddr, AddressInfo& ret, uint32_t returnAddress, uint32_t returnStackPointer, StackFrameFlags flags)
 {
 	if(_callstack.size() >= 511) {
 		//Ensure callstack stays below 512 entries - games can use various tricks that could keep making the callstack grow
@@ -78,11 +78,27 @@ void CallstackManager::Pop(AddressInfo& dest, uint32_t destAddress, uint32_t sta
 	}
 }
 
-void CallstackManager::GetCallstack(StackFrameInfo* callstackArray, uint32_t &callstackSize)
+void CallstackManager::PushHalted()
+{
+	if(_callstack.empty() || _callstack.back().Flags != StackFrameFlags::Halt) {
+		AddressInfo addr { 0, MemoryType::None };
+		Push(addr, 0, addr, 0, addr, 0, 0, StackFrameFlags::Halt);
+	}
+}
+
+void CallstackManager::PopHalted()
+{
+	if(!_callstack.empty() && _callstack.back().Flags == StackFrameFlags::Halt) {
+		_callstack.pop_back();
+		_profiler->UnstackFunction();
+	}
+}
+
+void CallstackManager::GetCallstack(StackFrameInfo* callstackArray, uint32_t& callstackSize)
 {
 	DebugBreakHelper helper(_debugger);
 	int i = 0;
-	for(StackFrameInfo &info : _callstack) {
+	for(StackFrameInfo& info : _callstack) {
 		callstackArray[i] = info;
 		i++;
 	}

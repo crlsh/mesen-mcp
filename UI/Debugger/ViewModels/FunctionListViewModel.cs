@@ -11,7 +11,7 @@ using Mesen.Debugger.Windows;
 using Mesen.Interop;
 using Mesen.Utilities;
 using Mesen.ViewModels;
-using ReactiveUI.Fody.Helpers;
+using CommunityToolkit.Mvvm.ComponentModel;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -21,11 +21,11 @@ using System.Text;
 
 namespace Mesen.Debugger.ViewModels
 {
-	public class FunctionListViewModel : DisposableViewModel
+	public partial class FunctionListViewModel : DisposableViewModel
 	{
-		[Reactive] public MesenList<FunctionViewModel> Functions { get; private set; } = new();
-		[Reactive] public SelectionModel<FunctionViewModel?> Selection { get; set; } = new() { SingleSelect = false };
-		[Reactive] public SortState SortState { get; set; } = new();
+		[ObservableProperty] public partial MesenList<FunctionViewModel> Functions { get; private set; } = new();
+		[ObservableProperty] public partial SelectionModel<FunctionViewModel?> Selection { get; set; } = new() { SingleSelect = false };
+		[ObservableProperty] public partial SortState SortState { get; set; } = new();
 		public List<int> ColumnWidths { get; } = ConfigManager.Config.Debug.Debugger.FunctionListColumnWidths;
 
 		public CpuType CpuType { get; }
@@ -94,7 +94,7 @@ namespace Mesen.Debugger.ViewModels
 				},
 
 				new ContextMenuSeparator(),
-		
+
 				new ContextMenuAction() {
 					ActionType = ActionType.FindOccurrences,
 					Shortcut = () => ConfigManager.Config.Debug.Shortcuts.Get(DebuggerShortcut.FunctionList_FindOccurrences),
@@ -141,10 +141,10 @@ namespace Mesen.Debugger.ViewModels
 	public class FunctionViewModel : INotifyPropertyChanged
 	{
 		private string _format;
+		private CpuType _cpuType;
 
 		public AddressInfo FuncAddr { get; private set; }
-		public CpuType _cpuType;
-			
+
 		public string AbsAddressDisplay { get; }
 		public int AbsAddress => FuncAddr.Address;
 		public int RelAddress { get; private set; }

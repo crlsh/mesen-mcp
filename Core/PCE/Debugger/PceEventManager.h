@@ -16,6 +16,13 @@ class PceVpc;
 class Debugger;
 class PceMemoryManager;
 
+enum class PceEventViewerSgxFilter
+{
+	Both,
+	Vdc1,
+	Vdc2
+};
+
 struct PceEventViewerConfig : public BaseEventViewerConfig
 {
 	EventViewerCategoryCfg Irq;
@@ -52,6 +59,10 @@ struct PceEventViewerConfig : public BaseEventViewerConfig
 	EventViewerCategoryCfg ArcadeCardWrites;
 	EventViewerCategoryCfg ArcadeCardReads;
 
+	EventViewerCategoryCfg VpcWrites;
+	EventViewerCategoryCfg VpcReads;
+
+	PceEventViewerSgxFilter SuperGrafxFilter;
 	bool ShowPreviousFrameEvents;
 };
 
@@ -79,12 +90,12 @@ protected:
 	bool ShowPreviousFrameEvents() override;
 
 public:
-	PceEventManager(Debugger *debugger, PceConsole *console);
+	PceEventManager(Debugger* debugger, PceConsole* console);
 	~PceEventManager();
 
-	void AddEvent(DebugEventType type, MemoryOperationInfo &operation, int32_t breakpointId = -1) override;
+	void AddEvent(DebugEventType type, MemoryOperationInfo& operation, int32_t breakpointId = -1) override;
 	void AddEvent(DebugEventType type) override;
-	
+
 	EventViewerCategoryCfg GetEventConfig(DebugEventInfo& evt) override;
 
 	uint32_t TakeEventSnapshot(bool forAutoRefresh) override;

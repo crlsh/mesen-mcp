@@ -1,17 +1,17 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
+using Avalonia.Rendering;
 using Avalonia.Threading;
-using Mesen.ViewModels;
-using System;
-using System.ComponentModel;
 using Mesen.Config;
 using Mesen.Debugger.ViewModels;
 using Mesen.Utilities;
-using Avalonia.Rendering;
+using Mesen.ViewModels;
 using Mesen.Windows;
-using Avalonia.Input;
+using System;
+using System.ComponentModel;
 
 namespace Mesen.Debugger.Windows
 {
@@ -28,17 +28,14 @@ namespace Mesen.Debugger.Windows
 		public DebuggerConfigWindow(DebuggerConfigWindowViewModel model)
 		{
 			InitializeComponent();
-#if DEBUG
-			this.AttachDevTools();
-#endif
 
 			_model = model;
 			DataContext = model;
 		}
 
-		public static void Open(DebugConfigWindowTab tab, IRenderRoot? parent)
+		public static void Open(DebugConfigWindowTab tab, Window? parent)
 		{
-			new DebuggerConfigWindow(new DebuggerConfigWindowViewModel(tab)).ShowCenteredDialog(parent as Visual);
+			new DebuggerConfigWindow(new DebuggerConfigWindowViewModel(tab)).ShowCenteredDialog(parent);
 		}
 
 		private void InitializeComponent()

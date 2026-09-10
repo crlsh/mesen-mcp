@@ -37,7 +37,7 @@ namespace Mesen.Debugger.Windows
 		private MesenTextEditor _txtScriptLog;
 		private DispatcherTimer _timer;
 		private ScriptWindowViewModel _model;
-		
+
 		public ScriptWindowViewModel Model => _model;
 
 		static ScriptWindow()
@@ -52,9 +52,6 @@ namespace Mesen.Debugger.Windows
 		public ScriptWindow(ScriptWindowViewModel model)
 		{
 			InitializeComponent();
-#if DEBUG
-			this.AttachDevTools();
-#endif
 
 			UpdateSyntaxDef();
 			_highlighting = HighlightingLoader.Load(_syntaxDef, HighlightingManager.Instance);
@@ -127,7 +124,7 @@ namespace Mesen.Debugger.Windows
 				Close();
 			}
 		}
-		
+
 		private void UpdateSyntaxDef()
 		{
 			Color[] colors = new Color[] { Colors.Green, Colors.SteelBlue, Colors.Blue, Colors.DarkMagenta, Colors.DarkRed, Colors.Black, Colors.Indigo };
@@ -365,7 +362,7 @@ namespace Mesen.Debugger.Windows
 
 			public object Description
 			{
-				get 
+				get
 				{
 					if(_enumName != null) {
 						DocEntryViewModel? enumEntry = CodeCompletionHelper.GetEntry(_enumName);

@@ -107,6 +107,7 @@
       <MinimalRebuild>false</MinimalRebuild>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <TreatWarningAsError>true</TreatWarningAsError>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -128,6 +129,7 @@
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <TreatWarningAsError>true</TreatWarningAsError>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -151,6 +153,7 @@
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <TreatWarningAsError>true</TreatWarningAsError>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -174,6 +177,7 @@
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <TreatWarningAsError>true</TreatWarningAsError>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -184,11 +188,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="ArchiveReader.h" />
+    <ClInclude Include="Audio\BiquadCascadeFilter.h" />
+    <ClInclude Include="Audio\BiquadFilter.h" />
     <ClInclude Include="Audio\blip_buf.h" />
     <ClInclude Include="Audio\CrossFeedFilter.h" />
     <ClInclude Include="Audio\Equalizer.h" />
     <ClInclude Include="Audio\HermiteResampler.h" />
-    <ClInclude Include="Audio\LowPassFilter.h" />
     <ClInclude Include="Audio\OnePoleLowPassFilter.h" />
     <ClInclude Include="Audio\orfanidis_eq.h" />
     <ClInclude Include="Audio\ReverbFilter.h" />
@@ -217,7 +222,6 @@
     <ClInclude Include="ISerializable.h" />
     <ClInclude Include="KreedSaiEagle\SaiEagle.h" />
     <ClInclude Include="magic_enum.hpp" />
-    <ClInclude Include="md5.h" />
     <ClInclude Include="miniz.h" />
     <ClInclude Include="AutoResetEvent.h" />
     <ClInclude Include="NTSC\nes_ntsc.h" />
@@ -245,6 +249,7 @@
     <ClInclude Include="StaticFor.h" />
     <ClInclude Include="StringUtilities.h" />
     <ClInclude Include="SZReader.h" />
+    <ClInclude Include="TimeUtilities.h" />
     <ClInclude Include="UPnPPortMapper.h" />
     <ClInclude Include="SimpleLock.h" />
     <ClInclude Include="Socket.h" />
@@ -268,6 +273,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="ArchiveReader.cpp" />
+    <ClCompile Include="Audio\BiquadCascadeFilter.cpp" />
+    <ClCompile Include="Audio\BiquadFilter.cpp" />
     <ClCompile Include="Audio\blip_buf.cpp" />
     <ClCompile Include="Audio\CrossFeedFilter.cpp" />
     <ClCompile Include="Audio\Equalizer.cpp" />
@@ -347,7 +354,6 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='PGO Optimize|x64'">NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="md5.cpp" />
     <ClCompile Include="miniz.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>

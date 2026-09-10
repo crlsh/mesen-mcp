@@ -31,7 +31,6 @@
 #include "Shared/CheatManager.h"
 #include "Shared/Movies/MovieManager.h"
 #include "Shared/BaseControlManager.h"
-#include "Shared/Interfaces/IBattery.h"
 #include "Shared/EmuSettings.h"
 #include "Shared/NotificationManager.h"
 #include "Netplay/GameClient.h"
@@ -84,7 +83,7 @@ NesConfig& NesConsole::GetNesConfig()
 	return _emu->GetSettings()->GetNesConfig();
 }
 
-void NesConsole::ProcessCpuClock() 
+void NesConsole::ProcessCpuClock()
 {
 	if(_mapper->HasCpuClockHook()) {
 		_mapper->ProcessCpuClock();
@@ -94,6 +93,11 @@ void NesConsole::ProcessCpuClock()
 	if(_controlManager->HasPendingWrites()) {
 		_controlManager->ProcessWrites();
 	}
+}
+
+uint8_t NesConsole::GetOpenBus()
+{
+	return _memoryManager->GetOpenBus();
 }
 
 Epsm* NesConsole::GetEpsm()
@@ -137,7 +141,7 @@ void NesConsole::Serialize(Serializer& s)
 		//For VS Dualsystem, the sub console's savestate is appended to the end of the file
 		SV(_vsSubConsole);
 	}
-	
+
 	SV(_controlManager);
 
 	if(!s.IsSaving()) {
@@ -145,10 +149,20 @@ void NesConsole::Serialize(Serializer& s)
 	}
 }
 
+optional<SaveStateCompatInfo> NesConsole::ValidateSaveStateCompatibility(Serializer& s, ConsoleType stateConsoleType)
+{
+	if(_vsSubConsole && !s.ContainsPrefix("vsSubConsole")) {
+		//Only allow loading VS DualSystem save states when a VS DualSystem game is loaded
+		return SaveStateCompatInfo { false };
+	}
+
+	return {};
+}
+
 void NesConsole::Reset()
 {
 	_memoryManager->Reset(true);
-	
+
 	_ppu->Reset(true);
 	_apu->Reset(true);
 	_cpu->Reset(true, _region);
@@ -158,6 +172,9 @@ void NesConsole::Reset()
 		_vsSubConsole->Reset();
 	}
 	_mapper->OnAfterResetPowerOn();
+	if(_mapper->GetEpsm()) {
+		_mapper->GetEpsm()->Reset();
+	}
 }
 
 LoadRomResult NesConsole::LoadRom(VirtualFile& romFile)
@@ -173,12 +190,14 @@ LoadRomResult NesConsole::LoadRom(VirtualFile& romFile)
 			//Create 2nd console (sub) dualsystem games
 			_vsSubConsole.reset(new NesConsole(_emu));
 			_vsSubConsole->_vsMainConsole = this;
+			_emu->SetDebuggerDisabled(true);
 			result = _vsSubConsole->LoadRom(romFile);
+			_emu->SetDebuggerDisabled(false);
 			if(result != LoadRomResult::Success) {
 				return result;
 			}
 		}
-		
+
 		if(GetNesConfig().AutoConfigureInput && romData.Info.InputType != GameInputType::Unspecified) {
 			//Auto-configure the inputs (if option is enabled)
 			InitializeInputDevices(romData.Info.InputType, romData.Info.System);
@@ -231,7 +250,7 @@ LoadRomResult NesConsole::LoadRom(VirtualFile& romFile)
 		UpdateRegion();
 
 		_mixer->Reset();
-		
+
 		_ppu->Reset(false);
 		_apu->Reset(false);
 		_memoryManager->Reset(false);
@@ -239,7 +258,7 @@ LoadRomResult NesConsole::LoadRom(VirtualFile& romFile)
 		_cpu->Reset(false, _region);
 		_mapper->OnAfterResetPowerOn();
 	}
-    return result;
+	return result;
 }
 
 void NesConsole::LoadHdPack(VirtualFile& romFile)
@@ -292,8 +311,17 @@ void NesConsole::UpdateRegion(bool forceUpdate)
 		_mixer->SetRegion(_region);
 	}
 }
-
 void NesConsole::RunFrame()
+{
+	if(_vsSubConsole) {
+		InternalRunFrame<true>();
+	} else {
+		InternalRunFrame<false>();
+	}
+}
+
+template<bool isDualSystem>
+void NesConsole::InternalRunFrame()
 {
 	UpdateRegion();
 
@@ -308,11 +336,12 @@ void NesConsole::RunFrame()
 
 	while(frame == _ppu->GetFrameCount()) {
 		_cpu->Exec();
-		if(_vsSubConsole) {
+		if constexpr(isDualSystem) {
 			RunVsSubConsole();
 		}
 	}
 
+	_mapper->EndFrame();
 	_apu->EndFrame();
 
 	if(!_nextFrameOverclockDisabled) {
@@ -323,6 +352,7 @@ void NesConsole::RunFrame()
 
 void NesConsole::RunVsSubConsole()
 {
+	_emu->SetDebuggerDisabled(true);
 	int64_t cycleGap;
 	while(true) {
 		//Run the sub console until it catches up to the main CPU
@@ -333,6 +363,7 @@ void NesConsole::RunVsSubConsole()
 			break;
 		}
 	}
+	_emu->SetDebuggerDisabled(false);
 }
 
 void NesConsole::SetNextFrameOverclockStatus(bool disabled)
@@ -355,6 +386,11 @@ double NesConsole::GetFps()
 	} else {
 		return 50.0069789081886;
 	}
+}
+
+uint32_t NesConsole::GetFrameCount()
+{
+	return _ppu->GetFrameCount();
 }
 
 PpuFrameInfo NesConsole::GetPpuFrame()
@@ -426,10 +462,6 @@ void NesConsole::SaveBattery()
 	if(_mapper) {
 		_mapper->SaveBattery();
 	}
-	
-	if(_controlManager) {
-		_controlManager->SaveBattery();
-	}
 }
 
 ShortcutState NesConsole::IsShortcutAllowed(EmulatorShortcut shortcut, uint32_t shortcutParam)
@@ -438,7 +470,7 @@ ShortcutState NesConsole::IsShortcutAllowed(EmulatorShortcut shortcut, uint32_t 
 	bool isNetplayClient = _emu->GetGameClient()->Connected();
 	bool isMoviePlaying = _emu->GetMovieManager()->Playing();
 	RomFormat romFormat = GetRomFormat();
-	
+
 	switch(shortcut) {
 		case EmulatorShortcut::FdsEjectDisk:
 		case EmulatorShortcut::FdsInsertNextDisk:
@@ -635,6 +667,9 @@ void NesConsole::InitializeInputDevices(GameInputType inputType, GameSystem syst
 		log("[Input] 2 SNES controllers connected");
 		port1 = ControllerType::SnesController;
 		port2 = ControllerType::SnesController;
+	} else if(inputType == GameInputType::FcnsController) {
+		log("[Input] FCNS controller connected");
+		expDevice = ControllerType::FcnsController;
 	} else {
 		log("[Input] 2 NES controllers connected");
 	}
@@ -683,8 +718,14 @@ void NesConsole::InitializeRam(void* data, uint32_t length)
 DipSwitchInfo NesConsole::GetDipSwitchInfo()
 {
 	DipSwitchInfo info = {};
-	info.DipSwitchCount = _mapper->GetMapperDipSwitchCount();
 	info.DatabaseId = _mapper->GetRomInfo().Hash.PrgCrc32;
+
+	switch(GetRomFormat()) {
+		case RomFormat::VsSystem: info.DipSwitchCount = 8; break;
+		case RomFormat::VsDualSystem: info.DipSwitchCount = 16; break;
+		default: info.DipSwitchCount = _mapper->GetMapperDipSwitchCount(); break;
+	}
+
 	return info;
 }
 
@@ -726,7 +767,7 @@ void NesConsole::StopRecordingHdPack()
 {
 	if(_hdPackBuilder) {
 		auto lock = _emu->AcquireLock();
-		
+
 		_emu->GetVideoDecoder()->WaitForAsyncFrameDecode();
 
 		std::stringstream saveState;

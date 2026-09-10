@@ -11,7 +11,7 @@ using Mesen.Debugger.Utilities;
 using Mesen.Debugger.ViewModels;
 using Mesen.Interop;
 using Mesen.Utilities;
-using ReactiveUI.Fody.Helpers;
+using CommunityToolkit.Mvvm.ComponentModel;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -29,12 +29,9 @@ namespace Mesen.Debugger.Windows
 		public GoToAllWindow(GoToAllViewModel model)
 		{
 			_model = model;
-			DataContext =  model;
+			DataContext = model;
 
 			InitializeComponent();
-#if DEBUG
-			this.AttachDevTools();
-#endif
 		}
 
 		private void InitializeComponent()
@@ -54,7 +51,7 @@ namespace Mesen.Debugger.Windows
 		{
 			base.OnOpened(e);
 			ListBox list = this.GetControl<ListBox>("lstResults");
-			list.DoubleTapped += lstResults_DoubleTapped;
+			list.DoubleTapped += LstResults_DoubleTapped;
 			list.PointerReleased += List_PointerReleased;
 
 			Dispatcher.UIThread.Post(() => {
@@ -73,7 +70,7 @@ namespace Mesen.Debugger.Windows
 			}
 		}
 
-		private void lstResults_DoubleTapped(object? sender, RoutedEventArgs e)
+		private void LstResults_DoubleTapped(object? sender, RoutedEventArgs e)
 		{
 			_isDoubleTap = true;
 		}
@@ -98,7 +95,7 @@ namespace Mesen.Debugger.Windows
 				case Key.PageUp: MoveSelection(-5); e.Handled = true; break;
 				case Key.Home: _model.SelectionModel.SelectedIndex = 0; e.Handled = true; break;
 				case Key.End: _model.SelectionModel.SelectedIndex = _model.SearchResults.Count - 1; e.Handled = true; break;
-			} 
+			}
 			base.OnKeyDown(e);
 		}
 
@@ -109,7 +106,7 @@ namespace Mesen.Debugger.Windows
 				Close();
 			}
 		}
-		
+
 		private void Select_OnClick(object sender, RoutedEventArgs e)
 		{
 			SelectAndClose();

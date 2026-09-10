@@ -3,6 +3,7 @@
 #include "Lua/lua.hpp"
 #include "Debugger/LuaCallHelper.h"
 #include "Debugger/Debugger.h"
+#include "Debugger/IDebugger.h"
 #include "Debugger/MemoryDumper.h"
 #include "Debugger/ScriptingContext.h"
 #include "Debugger/MemoryAccessCounter.h"
@@ -28,11 +29,10 @@
 #include "Utilities/HexUtilities.h"
 #include "Utilities/FolderUtilities.h"
 #include "Utilities/magic_enum.hpp"
-#include "Shared/MemoryOperationType.h"
 
 #ifdef _MSC_VER
-//TODO MSVC seems to trigger this by mistake because of the macros?
-#pragma warning ( disable : 4702 ) //unreachable code
+	//TODO MSVC seems to trigger this by mistake because of the macros?
+	#pragma warning(disable : 4702) //unreachable code
 #endif
 
 #define lua_pushintvalue(name, value) lua_pushliteral(lua, #name); lua_pushinteger(lua, (int)value); lua_settable(lua, -3);
@@ -58,6 +58,7 @@ Debugger* LuaApi::_debugger = nullptr;
 Emulator* LuaApi::_emu = nullptr;
 MemoryDumper* LuaApi::_memoryDumper = nullptr;
 ScriptingContext* LuaApi::_context = nullptr;
+Serializer LuaApi::_serializer(0, true, SerializeFormat::Map);
 
 enum class AccessCounterType
 {
@@ -84,7 +85,7 @@ void LuaApi::LuaPushIntValue(lua_State* lua, string name, int value)
 	lua_settable(lua, -3);
 }
 
-int LuaApi::GetLibrary(lua_State *lua)
+int LuaApi::GetLibrary(lua_State* lua)
 {
 	static const luaL_Reg apilib[] = {
 		{ "getMemorySize", LuaApi::GetMemorySize },
@@ -98,7 +99,7 @@ int LuaApi::GetLibrary(lua_State *lua)
 
 		{ "readWord", LuaApi::ReadMemory16 }, //for backward compatibility
 		{ "writeWord", LuaApi::WriteMemory16 }, //for backward compatibility
-		
+
 		{ "convertAddress", LuaApi::ConvertAddress },
 		{ "getLabelAddress", LuaApi::GetLabelAddress },
 
@@ -111,6 +112,7 @@ int LuaApi::GetLibrary(lua_State *lua)
 		{ "drawString", LuaApi::DrawString },
 
 		{ "drawPixel", LuaApi::DrawPixel },
+		{ "drawPixels", LuaApi::DrawPixels },
 		{ "drawLine", LuaApi::DrawLine },
 		{ "drawRectangle", LuaApi::DrawRectangle },
 		{ "clearScreen", LuaApi::ClearScreen },
@@ -136,13 +138,14 @@ int LuaApi::GetLibrary(lua_State *lua)
 		{ "takeScreenshot", LuaApi::TakeScreenshot },
 
 		{ "isKeyPressed", LuaApi::IsKeyPressed },
+		{ "getPressedKeys", LuaApi::GetPressedKeys },
 		{ "getInput", LuaApi::GetInput },
 		{ "setInput", LuaApi::SetInput },
 
 		{ "getAccessCounters", LuaApi::GetAccessCounters },
 		{ "resetAccessCounters", LuaApi::ResetAccessCounters },
 
-		{ "getCdlData", LuaApi::GetCdlData},
+		{ "getCdlData", LuaApi::GetCdlData },
 
 		{ "addCheat", LuaApi::AddCheat },
 		{ "clearCheats", LuaApi::ClearCheats },
@@ -152,13 +155,18 @@ int LuaApi::GetLibrary(lua_State *lua)
 
 		{ "getState", LuaApi::GetState },
 		{ "setState", LuaApi::SetState },
+		{ "getCpuState", LuaApi::GetCpuState },
+		{ "setCpuState", LuaApi::SetCpuState },
+
+		{ "getCpuCycleCount", LuaApi::GetCpuCycleCount },
+		{ "getMasterClock", LuaApi::GetMasterClock },
 
 		{ "selectDrawSurface", LuaApi::SelectDrawSurface },
 
 		{ "getScriptDataFolder", LuaApi::GetScriptDataFolder },
 		{ "getRomInfo", LuaApi::GetRomInfo },
 		{ "getLogWindowLog", LuaApi::GetLogWindowLog },
-		{ NULL,NULL }
+		{ NULL, NULL }
 	};
 
 	luaL_newlib(lua, apilib);
@@ -203,6 +211,51 @@ void LuaApi::GenerateEnumDefinition(lua_State* lua, string enumName, unordered_s
 	lua_settable(lua, -3);
 }
 
+string LuaApi::SerializeTable(lua_State* lua)
+{
+	string result = "{ ";
+	bool firstKey = true;
+	lua_pushnil(lua);
+	while(lua_next(lua, -2) != 0) {
+		int keyType = lua_type(lua, -2);
+		if(keyType == LUA_TSTRING || keyType == LUA_TNUMBER) {
+			if(!firstKey) {
+				result += ", ";
+			}
+			firstKey = false;
+			if(keyType == LUA_TSTRING) {
+				size_t len = 0;
+				const char* cstr = lua_tolstring(lua, -2, &len);
+				result += string(cstr, len);
+			} else {
+				if(lua_isinteger(lua, -2)) {
+					lua_Integer integer = lua_tointeger(lua, -2);
+					result += std::to_string(integer);
+				} else {
+					lua_Number number = lua_tonumber(lua, -2);
+					result += std::to_string(number);
+				}
+			}
+			result += " = ";
+
+			if(lua_type(lua, -1) == LUA_TSTRING) {
+				result += "\"";
+				result += lua_tostring(lua, -1);
+				result += "\"";
+			} else if(lua_istable(lua, -1)) {
+				result += SerializeTable(lua);
+			} else {
+				luaL_tolstring(lua, -1, nullptr);
+				result += lua_tostring(lua, -1);
+				lua_pop(lua, 1);
+			}
+		}
+		lua_pop(lua, 1);
+	}
+	result = StringUtilities::Trim(result);
+	return result + (result.size() > 1 ? " }" : "}");
+}
+
 DebugHud* LuaApi::GetHud()
 {
 	if(_context->GetDrawSurface() == ScriptDrawSurface::ConsoleScreen) {
@@ -241,7 +294,7 @@ int LuaApi::GetMemorySize(lua_State* lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::ReadMemory(lua_State *lua)
+int LuaApi::ReadMemory(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	l.ForceParamCount(3);
@@ -258,7 +311,7 @@ int LuaApi::ReadMemory(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::WriteMemory(lua_State *lua)
+int LuaApi::WriteMemory(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	int type = l.ReadInteger();
@@ -274,7 +327,7 @@ int LuaApi::WriteMemory(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::ReadMemory16(lua_State *lua)
+int LuaApi::ReadMemory16(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	l.ForceParamCount(3);
@@ -308,7 +361,7 @@ int LuaApi::ReadMemory32(lua_State* lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::WriteMemory16(lua_State *lua)
+int LuaApi::WriteMemory16(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	int type = l.ReadInteger();
@@ -339,7 +392,7 @@ int LuaApi::WriteMemory32(lua_State* lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::ConvertAddress(lua_State *lua)
+int LuaApi::ConvertAddress(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	l.ForceParamCount(3);
@@ -395,7 +448,7 @@ int LuaApi::GetLabelAddress(lua_State* lua)
 	return 1;
 }
 
-int LuaApi::RegisterMemoryCallback(lua_State *lua)
+int LuaApi::RegisterMemoryCallback(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	l.ForceParamCount(6);
@@ -426,11 +479,11 @@ int LuaApi::RegisterMemoryCallback(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::UnregisterMemoryCallback(lua_State *lua)
+int LuaApi::UnregisterMemoryCallback(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	l.ForceParamCount(6);
-	
+
 	MemoryType memType = (MemoryType)l.ReadInteger((int)_context->GetDefaultMemType());
 	CpuType cpuType = (CpuType)l.ReadInteger((int)_context->GetDefaultCpuType());
 	int endAddr = l.ReadInteger(-1);
@@ -455,7 +508,7 @@ int LuaApi::UnregisterMemoryCallback(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::RegisterEventCallback(lua_State *lua)
+int LuaApi::RegisterEventCallback(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	EventType type = (EventType)l.ReadInteger();
@@ -468,7 +521,7 @@ int LuaApi::RegisterEventCallback(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::UnregisterEventCallback(lua_State *lua)
+int LuaApi::UnregisterEventCallback(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	EventType type = (EventType)l.ReadInteger();
@@ -496,7 +549,7 @@ int LuaApi::MeasureString(lua_State* lua)
 	return 1;
 }
 
-int LuaApi::DrawString(lua_State *lua)
+int LuaApi::DrawString(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	l.ForceParamCount(8);
@@ -516,7 +569,7 @@ int LuaApi::DrawString(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::DrawLine(lua_State *lua)
+int LuaApi::DrawLine(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	l.ForceParamCount(7);
@@ -535,7 +588,7 @@ int LuaApi::DrawLine(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::DrawPixel(lua_State *lua)
+int LuaApi::DrawPixel(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	l.ForceParamCount(5);
@@ -552,7 +605,40 @@ int LuaApi::DrawPixel(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::DrawRectangle(lua_State *lua)
+int LuaApi::DrawPixels(lua_State* lua)
+{
+	LuaCallHelper l(lua);
+	l.ForceParamCount(7);
+	int displayDelay = l.ReadInteger(0);
+	int frameCount = l.ReadInteger(1);
+	l.SkipParam();
+	int x = l.ReadIntegerFromIndex(1);
+	int y = l.ReadIntegerFromIndex(2);
+	int width = l.ReadIntegerFromIndex(3);
+	int height = l.ReadIntegerFromIndex(4);
+	checkminparams(5);
+
+	luaL_checktype(lua, -1, LUA_TTABLE);
+
+	uint32_t* data = new uint32_t[width * height];
+	std::fill(data, data + width * height, 0xFF000000);
+
+	for(int i = 0, len = width * height; i < len; i++) {
+		if(lua_rawgeti(lua, -1, i + 1) != LUA_TNIL) {
+			data[i] = (uint32_t)lua_tointeger(lua, -1);
+		}
+		lua_pop(lua, 1);
+	}
+
+	lua_pop(lua, 5);
+
+	int startFrame = _emu->GetFrameCount() + displayDelay;
+	GetHud()->DrawPixels(data, x, y, width, height, frameCount, startFrame);
+
+	return l.ReturnCount();
+}
+
+int LuaApi::DrawRectangle(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	l.ForceParamCount(8);
@@ -572,7 +658,7 @@ int LuaApi::DrawRectangle(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::ClearScreen(lua_State *lua)
+int LuaApi::ClearScreen(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	checkparams();
@@ -651,14 +737,14 @@ std::pair<unique_ptr<BaseVideoFilter>, FrameInfo> LuaApi::GetRenderedFrame()
 	return std::make_pair(std::move(filter), frameSize);
 }
 
-int LuaApi::GetScreenBuffer(lua_State *lua)
+int LuaApi::GetScreenBuffer(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 
 	auto [filter, frameSize] = GetRenderedFrame();
 	uint32_t* rgbBuffer = filter->GetOutputBuffer();
 
-	lua_createtable(lua, frameSize.Height*frameSize.Width, 0);
+	lua_createtable(lua, frameSize.Height * frameSize.Width, 0);
 	for(int32_t i = 0, len = frameSize.Height * frameSize.Width; i < len; i++) {
 		lua_pushinteger(lua, rgbBuffer[i] & 0xFFFFFF);
 		lua_rawseti(lua, -2, i + 1);
@@ -667,10 +753,10 @@ int LuaApi::GetScreenBuffer(lua_State *lua)
 	return 1;
 }
 
-int LuaApi::SetScreenBuffer(lua_State *lua)
+int LuaApi::SetScreenBuffer(lua_State* lua)
 {
 	LuaCallHelper l(lua);
-	
+
 	FrameInfo size = InternalGetScreenSize();
 
 	int startFrame = _emu->GetFrameCount();
@@ -678,17 +764,17 @@ int LuaApi::SetScreenBuffer(lua_State *lua)
 
 	luaL_checktype(lua, 1, LUA_TTABLE);
 	for(int i = 0, len = size.Height * size.Width; i < len; i++) {
-		lua_rawgeti(lua, 1, i+1);
+		lua_rawgeti(lua, 1, i + 1);
 		uint32_t color = (uint32_t)lua_tointeger(lua, -1);
 		lua_pop(lua, 1);
 		cmd->SetPixel(i, color ^ 0xFF000000);
 	}
-	
+
 	_emu->GetDebugHud()->AddCommand(std::move(cmd));
 	return l.ReturnCount();
 }
 
-int LuaApi::GetPixel(lua_State *lua)
+int LuaApi::GetPixel(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	int y = l.ReadInteger();
@@ -703,7 +789,7 @@ int LuaApi::GetPixel(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::GetMouseState(lua_State *lua)
+int LuaApi::GetMouseState(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	MousePosition pos = KeyManager::GetMousePosition();
@@ -713,23 +799,33 @@ int LuaApi::GetMouseState(lua_State *lua)
 	lua_pushintvalue(y, pos.Y);
 	lua_pushdoublevalue(relativeX, pos.RelativeX);
 	lua_pushdoublevalue(relativeY, pos.RelativeY);
-	
+
 	lua_pushboolvalue(left, KeyManager::IsMouseButtonPressed(MouseButton::LeftButton));
 	lua_pushboolvalue(middle, KeyManager::IsMouseButtonPressed(MouseButton::MiddleButton));
 	lua_pushboolvalue(right, KeyManager::IsMouseButtonPressed(MouseButton::RightButton));
 	return 1;
 }
 
-int LuaApi::Log(lua_State *lua)
+int LuaApi::Log(lua_State* lua)
 {
 	LuaCallHelper l(lua);
-	string text = l.ReadString();
-	checkparams();
+	l.CheckSpecificParamCount(1);
+
+	string text;
+	if(lua_type(lua, -1) == LUA_TSTRING) {
+		text = lua_tostring(lua, -1);
+	} else if(lua_istable(lua, -1)) {
+		text = LuaApi::SerializeTable(lua);
+	} else {
+		luaL_tolstring(lua, -1, nullptr);
+		text = lua_tostring(lua, -1);
+		lua_pop(lua, 1);
+	}
 	_context->Log(text);
 	return l.ReturnCount();
 }
 
-int LuaApi::DisplayMessage(lua_State *lua)
+int LuaApi::DisplayMessage(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	string text = l.ReadString();
@@ -739,7 +835,7 @@ int LuaApi::DisplayMessage(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::Reset(lua_State *lua)
+int LuaApi::Reset(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	checkparams();
@@ -757,7 +853,7 @@ int LuaApi::Stop(lua_State* lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::BreakExecution(lua_State *lua)
+int LuaApi::BreakExecution(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	checkparams();
@@ -766,7 +862,7 @@ int LuaApi::BreakExecution(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::Resume(lua_State *lua)
+int LuaApi::Resume(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	checkparams();
@@ -775,7 +871,7 @@ int LuaApi::Resume(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::Step(lua_State *lua)
+int LuaApi::Step(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	l.ForceParamCount(3);
@@ -794,7 +890,7 @@ int LuaApi::Step(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::Rewind(lua_State *lua)
+int LuaApi::Rewind(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	int seconds = l.ReadInteger();
@@ -804,7 +900,7 @@ int LuaApi::Rewind(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::TakeScreenshot(lua_State *lua)
+int LuaApi::TakeScreenshot(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	checkparams();
@@ -814,7 +910,7 @@ int LuaApi::TakeScreenshot(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::IsKeyPressed(lua_State *lua)
+int LuaApi::IsKeyPressed(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	string keyName = l.ReadString();
@@ -825,7 +921,27 @@ int LuaApi::IsKeyPressed(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::GetInput(lua_State *lua)
+int LuaApi::GetPressedKeys(lua_State* lua)
+{
+	LuaCallHelper l(lua);
+	checkparams();
+
+	vector<uint16_t> pressedKeys = KeyManager::GetPressedKeys();
+	int size = (int)pressedKeys.size();
+
+	lua_createtable(lua, size, 0);
+	for(size_t i = 0; i < size; i++) {
+		string name = KeyManager::GetKeyName(pressedKeys[i]);
+		if(name.size() > 0) {
+			lua_pushlstring(lua, name.c_str(), name.size());
+			lua_rawseti(lua, -2, i + 1);
+		}
+	}
+
+	return 1;
+}
+
+int LuaApi::GetInput(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	l.ForceParamCount(2);
@@ -903,14 +1019,13 @@ int LuaApi::SetInput(lua_State* lua)
 		}
 	}
 
-	controller->RefreshStateBuffer();
-
+	// STRUCTURAL: CE removed RefreshStateBuffer call — method moved to protected, SRP
 	lua_pop(lua, 1);
 
 	return l.ReturnCount();
 }
 
-int LuaApi::GetAccessCounters(lua_State *lua)
+int LuaApi::GetAccessCounters(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	AccessCounterType counterType = (AccessCounterType)l.ReadInteger();
@@ -920,8 +1035,7 @@ int LuaApi::GetAccessCounters(lua_State *lua)
 	checkparams();
 
 	uint32_t size = _memoryDumper->GetMemorySize(memoryType);
-	vector<AddressCounters> counts;
-	counts.resize(size, {});
+	vector<AddressCounters> counts(size);
 	_debugger->GetMemoryAccessCounter()->GetAccessCounts(0, size, memoryType, counts.data());
 
 	auto getValue = [&](AddressCounters& counter) -> uint64_t {
@@ -945,7 +1059,7 @@ int LuaApi::GetAccessCounters(lua_State *lua)
 	return 1;
 }
 
-int LuaApi::ResetAccessCounters(lua_State *lua)
+int LuaApi::ResetAccessCounters(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	checkparams();
@@ -965,8 +1079,7 @@ int LuaApi::GetCdlData(lua_State* lua)
 	}
 
 	uint32_t size = _memoryDumper->GetMemorySize(memoryType);
-	vector<uint8_t> cdlData;
-	cdlData.resize(size, {});
+	vector<uint8_t> cdlData(size);
 	_debugger->GetCdlManager()->GetCdlData(0, size, memoryType, cdlData.data());
 
 	lua_newtable(lua);
@@ -978,7 +1091,7 @@ int LuaApi::GetCdlData(lua_State* lua)
 	return 1;
 }
 
-int LuaApi::GetScriptDataFolder(lua_State *lua)
+int LuaApi::GetScriptDataFolder(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	checkparams();
@@ -994,7 +1107,7 @@ int LuaApi::GetScriptDataFolder(lua_State *lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::GetRomInfo(lua_State *lua)
+int LuaApi::GetRomInfo(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	checkparams();
@@ -1009,11 +1122,11 @@ int LuaApi::GetRomInfo(lua_State *lua)
 	return 1;
 }
 
-int LuaApi::GetLogWindowLog(lua_State *lua)
+int LuaApi::GetLogWindowLog(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	checkparams();
-	
+
 	l.Return(MessageManager::GetLog());
 	return l.ReturnCount();
 }
@@ -1059,6 +1172,8 @@ int LuaApi::LoadSavestate(lua_State* lua)
 	LuaCallHelper l(lua);
 	string savestate = l.ReadString();
 	checkparams();
+	// STRUCTURAL: CE added savestate validation macro — defense-in-depth, keep
+	checksavestateconditions();
 
 	stringstream ss;
 	ss << savestate;
@@ -1067,40 +1182,49 @@ int LuaApi::LoadSavestate(lua_State* lua)
 	return l.ReturnCount();
 }
 
-int LuaApi::GetState(lua_State *lua)
+int LuaApi::GetState(lua_State* lua)
 {
 	LuaCallHelper l(lua);
 	checkparams();
 
-	Serializer s(0, true, SerializeFormat::Map);
+	Serializer& s = _serializer;
+	s.Reset();
 	s.Stream(*_emu->GetConsole().get(), "", -1);
 
 	//Add some more Lua-specific values
 	uint32_t frameCount = _emu->GetFrameCount();
 	uint32_t masterClock = _emu->GetMasterClock();
 	uint32_t clockRate = _emu->GetMasterClockRate();
+	double fps = _emu->GetConsole()->GetFps();
 	string consoleType = string(magic_enum::enum_name<ConsoleType>(_emu->GetConsoleType()));
 	string region = string(magic_enum::enum_name<ConsoleRegion>(_emu->GetRegion()));
-	
+
+	SV(fps);
 	SV(clockRate);
 	SV(consoleType);
 	SV(region);
 	SV(frameCount);
 	SV(masterClock);
 
-	unordered_map<string, SerializeMapValue>& values = s.GetMapValues();
+	GenerateStateTable(s, lua);
 
-	lua_newtable(lua);
-	for(auto& kvp : values) {
-		lua_pushlstring(lua, kvp.first.c_str(), kvp.first.size());
-		switch(kvp.second.Format) {
-			case SerializeMapValueFormat::Integer: lua_pushinteger(lua, kvp.second.Value.Integer); break;
-			case SerializeMapValueFormat::Double: lua_pushnumber(lua, kvp.second.Value.Double); break;
-			case SerializeMapValueFormat::Bool: lua_pushboolean(lua, kvp.second.Value.Bool); break;
-			case SerializeMapValueFormat::String: lua_pushlstring(lua, kvp.second.StringValue.c_str(), kvp.second.StringValue.size()); break;
-		}
-		lua_settable(lua, -3);
+	return 1;
+}
+
+int LuaApi::GetCpuState(lua_State* lua)
+{
+	LuaCallHelper l(lua);
+	l.ForceParamCount(1);
+	CpuType cpuType = (CpuType)l.ReadInteger((uint32_t)_context->GetDefaultCpuType());
+	checkEnum(CpuType, cpuType, "invalid cpu type");
+
+	Serializer& s = _serializer;
+	s.Reset();
+	ISerializable* cpu = _debugger->GetSerializableCpu(cpuType);
+	if(cpu) {
+		s.Stream(*cpu, "", -1);
 	}
+	GenerateStateTable(s, lua);
 	return 1;
 }
 
@@ -1109,9 +1233,55 @@ int LuaApi::SetState(lua_State* lua)
 	lua_settop(lua, 1);
 	luaL_checktype(lua, -1, LUA_TTABLE);
 
+	Serializer s(0, false, SerializeFormat::Map);
+	ReadStateTable(s, lua);
+	s.Stream(*_emu->GetConsole().get(), "", -1);
+	return 0;
+}
+
+int LuaApi::SetCpuState(lua_State* lua)
+{
+	LuaCallHelper l(lua);
+	l.ForceParamCount(2);
+
+	CpuType cpuType = (CpuType)l.ReadInteger((uint32_t)_context->GetDefaultCpuType());
+	checkEnum(CpuType, cpuType, "invalid cpu type");
+
+	ISerializable* cpu = _debugger->GetSerializableCpu(cpuType);
+	if(cpu) {
+		lua_settop(lua, 1);
+		luaL_checktype(lua, -1, LUA_TTABLE);
+
+		Serializer s(0, false, SerializeFormat::Map);
+		ReadStateTable(s, lua);
+
+		s.Stream(*cpu, "", -1);
+	}
+	return 0;
+}
+
+void LuaApi::GenerateStateTable(Serializer& s, lua_State* lua)
+{
+	vector<string>& keys = s.GetMapKeys();
+	vector<SerializeMapValue>& values = s.GetMapValues();
+
+	lua_createtable(lua, 0, (int)values.size());
+	for(size_t i = 0, len = values.size(); i < len; i++) {
+		switch(values[i].Format) {
+			case SerializeMapValueFormat::Integer: lua_pushinteger(lua, values[i].Value.Integer); break;
+			case SerializeMapValueFormat::Double: lua_pushnumber(lua, values[i].Value.Double); break;
+			case SerializeMapValueFormat::Bool: lua_pushboolean(lua, values[i].Value.Bool); break;
+			case SerializeMapValueFormat::String: lua_pushlstring(lua, values[i].StringValue.c_str(), values[i].StringValue.size()); break;
+		}
+		lua_setfield(lua, -2, keys[i].c_str());
+	}
+}
+
+void LuaApi::ReadStateTable(Serializer& s, lua_State* lua)
+{
 	unordered_map<string, SerializeMapValue> map;
 
-	lua_pushnil(lua);  /* first key */
+	lua_pushnil(lua); /* first key */
 	while(lua_next(lua, -2) != 0) {
 		/* uses 'key' (at index -2) and 'value' (at index -1) */
 		if(lua_type(lua, -2) == LUA_TSTRING) {
@@ -1135,14 +1305,30 @@ int LuaApi::SetState(lua_State* lua)
 				}
 			}
 		}
-		
+
 		/* removes 'value'; keeps 'key' for next iteration */
 		lua_pop(lua, 1);
 	}
 
-	Serializer s(0, false, SerializeFormat::Map);
 	s.LoadFromMap(map);
+}
 
-	s.Stream(*_emu->GetConsole().get(), "", -1);
-	return 0;
+int LuaApi::GetCpuCycleCount(lua_State* lua)
+{
+	LuaCallHelper l(lua);
+	l.ForceParamCount(1);
+	CpuType cpuType = (CpuType)l.ReadInteger((uint32_t)_context->GetDefaultCpuType());
+	checkEnum(CpuType, cpuType, "invalid cpu type");
+
+	IDebugger* debugger = _debugger->GetCpuDebugger(cpuType);
+	l.Return(debugger ? debugger->GetCpuCycleCount() : 0);
+	return l.ReturnCount();
+}
+
+int LuaApi::GetMasterClock(lua_State* lua)
+{
+	LuaCallHelper l(lua);
+	checkparams();
+	l.Return(_emu->GetMasterClock());
+	return l.ReturnCount();
 }

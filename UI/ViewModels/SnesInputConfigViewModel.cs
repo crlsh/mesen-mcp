@@ -1,26 +1,23 @@
-﻿using Mesen.Config;
-using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
+using Mesen.Config;
 using System;
 using System.Linq;
-using System.Reactive.Linq;
 
 namespace Mesen.ViewModels
 {
-	public class SnesInputConfigViewModel : DisposableViewModel
+	public partial class SnesInputConfigViewModel : DisposableViewModel
 	{
-		[Reactive] public SnesConfig Config { get; set; }
-		
-		[ObservableAsProperty] public bool HasMultitap1 { get; }
-		[ObservableAsProperty] public bool HasMultitap2 { get; }
+		[ObservableProperty] public partial SnesConfig Config { get; set; }
 
 		public Enum[] AvailableControllerTypesP1 => new Enum[] {
 			ControllerType.None,
 			ControllerType.SnesController,
 			ControllerType.SnesMouse,
 			ControllerType.SuperScope,
+			ControllerType.SnesNttDataKeypad,
 			ControllerType.Multitap,
 			ControllerType.SnesRumbleController,
+			ControllerType.SnesBlueRetroController,
 		};
 
 		public Enum[] AvailableControllerTypesP2 => new Enum[] {
@@ -28,7 +25,10 @@ namespace Mesen.ViewModels
 			ControllerType.SnesController,
 			ControllerType.SnesMouse,
 			ControllerType.SuperScope,
-			ControllerType.Multitap
+			ControllerType.SnesNttDataKeypad,
+			ControllerType.AsciiTurboFileTwinTf2,
+			ControllerType.AsciiTurboFileTwinStf,
+			ControllerType.Multitap,
 		};
 
 		public Enum[] AvailableControllerTypesMultitap => new Enum[] {
@@ -44,14 +44,6 @@ namespace Mesen.ViewModels
 		public SnesInputConfigViewModel(SnesConfig config)
 		{
 			Config = config;
-		
-			AddDisposable(this.WhenAnyValue(x => x.Config.Port1.Type)
-				.Select(x => x == ControllerType.Multitap)
-				.ToPropertyEx(this, x => x.HasMultitap1));
-
-			AddDisposable(this.WhenAnyValue(x => x.Config.Port2.Type)
-				.Select(x => x == ControllerType.Multitap)
-				.ToPropertyEx(this, x => x.HasMultitap2));
 		}
 	}
 }

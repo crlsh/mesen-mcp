@@ -42,6 +42,7 @@ public struct GbMemoryManagerState
 	public byte SerialData;
 	public byte SerialControl;
 	public byte SerialBitCount;
+	[MarshalAs(UnmanagedType.I1)] public bool MostRecentSerialBit;
 
 	[MarshalAs(UnmanagedType.ByValArray, SizeConst = 0x100)]
 	public byte[] IsReadRegister;
@@ -158,7 +159,7 @@ public enum PpuMode
 
 public struct GbPpuState : BaseState
 {
-	public byte Scanline;
+	public UInt16 Scanline;
 	public UInt16 Cycle;
 	public UInt16 IdleCycles;
 	public PpuMode Mode;
