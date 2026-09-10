@@ -18,6 +18,9 @@
 #include "Debugger/BreakpointManager.h"
 #include "Debugger/ITraceLogger.h"
 #include "Debugger/CallstackManager.h"
+// STRUCTURAL: CE disassembly search for search_disassembly/find_occurrences MCP tools
+#include "Debugger/DisassemblySearch.h"
+#include "Debugger/Disassembler.h"
 #include "Shared/McpWriteLog.h"
 #include "NES/NesTypes.h"
 #include "NES/NesConsole.h"
@@ -425,6 +428,18 @@ std::shared_ptr<McpTypedCommand> McpServer::ParseCommand(const std::string& json
 		cmd->type = McpCommandType::StopFramebufferCapture;
 	} else if(method == "get_framebuffer_capture_status") {
 		cmd->type = McpCommandType::GetFramebufferCaptureStatus;
+	// STRUCTURAL: CE disassembly search — additive MCP tools
+	} else if(method == "search_disassembly") {
+		cmd->type = McpCommandType::SearchDisassembly;
+		cmd->searchString = ExtractString(json, "query");
+		cmd->address = ExtractInt(json, "start_address", 0);
+		cmd->matchCase = ExtractInt(json, "match_case", 0) != 0;
+		cmd->count = ExtractInt(json, "max_results", 100);
+	} else if(method == "find_occurrences") {
+		cmd->type = McpCommandType::FindOccurrences;
+		cmd->searchString = ExtractString(json, "query");
+		cmd->matchCase = ExtractInt(json, "match_case", 0) != 0;
+		cmd->count = ExtractInt(json, "max_results", 100);
 	} else {
 		return nullptr;
 	}
@@ -498,6 +513,9 @@ std::string McpServer::ExecuteCommandDirect(McpTypedCommand& cmd)
 		case McpCommandType::StartFramebufferCapture: return ExecStartFramebufferCapture(cmd);
 		case McpCommandType::StopFramebufferCapture: return ExecStopFramebufferCapture(cmd);
 		case McpCommandType::GetFramebufferCaptureStatus: return ExecGetFramebufferCaptureStatus(cmd);
+		// STRUCTURAL: CE disassembly search — read-only debugger queries
+		case McpCommandType::SearchDisassembly: return ExecSearchDisassembly(cmd);
+		case McpCommandType::FindOccurrences: return ExecFindOccurrences(cmd);
 		default: return ErrorResponse(cmd.id, "command not supported in direct mode");
 	}
 }
@@ -717,6 +735,9 @@ std::string McpServer::ExecuteCommand(McpTypedCommand& cmd)
 		case McpCommandType::StartFramebufferCapture: return ExecStartFramebufferCapture(cmd);
 		case McpCommandType::StopFramebufferCapture: return ExecStopFramebufferCapture(cmd);
 		case McpCommandType::GetFramebufferCaptureStatus: return ExecGetFramebufferCaptureStatus(cmd);
+		// STRUCTURAL: CE disassembly search — read-only debugger queries
+		case McpCommandType::SearchDisassembly: return ExecSearchDisassembly(cmd);
+		case McpCommandType::FindOccurrences: return ExecFindOccurrences(cmd);
 		default: return ErrorResponse(cmd.id, "unknown command type");
 	}
 }
@@ -1893,4 +1914,72 @@ bool McpServer::SetInput(BaseControlDevice* device)
 	}
 	// STRUCTURAL: CE moved RefreshStateBuffer to protected; SetRawState suffices
 	return true;
+}
+
+// ============================================================================
+// STRUCTURAL: CE disassembly search — additive MCP tools wrapping CE exports
+// ============================================================================
+
+std::string McpServer::ExecSearchDisassembly(McpTypedCommand& cmd)
+{
+	if(_coreState.phase != EmuPhase::Running) {
+		return ErrorResponse(cmd.id, "emulator not running");
+	}
+
+	DebuggerRequest dbgRequest = _emu->GetDebugger(true);
+	Debugger* dbg = dbgRequest.GetDebugger();
+	if(!dbg) return ErrorResponse(cmd.id, "debugger unavailable");
+
+	IConsole* console = _emu->GetConsoleUnsafe();
+	if(!console) return ErrorResponse(cmd.id, "no console");
+
+	CpuType cpuType = GetMainCpuType(console->GetConsoleType());
+
+	DisassemblySearchOptions opts = {};
+	opts.MatchCase = cmd.matchCase;
+	opts.MatchWholeWord = false;
+	opts.SearchBackwards = false;
+	opts.SkipFirstLine = false;
+
+	// STRUCTURAL: CE's TextContains lowercases haystack but expects needle pre-lowered (SoC — caller normalizes)
+	std::string query = cmd.searchString;
+	if(!cmd.matchCase) {
+		std::transform(query.begin(), query.end(), query.begin(), ::tolower);
+	}
+
+	int maxResults = cmd.count;
+	if(maxResults < 1) maxResults = 1;
+	if(maxResults > 1000) maxResults = 1000;
+
+	std::vector<CodeLineData> results(maxResults);
+	uint32_t count = dbg->GetDisassemblySearch()->FindOccurrences(
+		cpuType, query.c_str(), opts, results.data(), (uint32_t)maxResults
+	);
+
+	std::ostringstream out;
+	out << "{\"count\":" << count << ",\"results\":[";
+	for(uint32_t i = 0; i < count; i++) {
+		if(i > 0) out << ",";
+		out << "{\"address\":" << results[i].Address
+		    << ",\"abs_address\":" << results[i].AbsoluteAddress.Address
+		    << ",\"text\":\"";
+		// Escape the text for JSON
+		for(int c = 0; c < 999 && results[i].Text[c]; c++) {
+			char ch = results[i].Text[c];
+			if(ch == '"') out << "\\\"";
+			else if(ch == '\\') out << "\\\\";
+			else if(ch == '\n') out << "\\n";
+			else if(ch == '\t') out << "\\t";
+			else out << ch;
+		}
+		out << "\"}";
+	}
+	out << "]}";
+	return OkResponse(cmd.id, out.str());
+}
+
+std::string McpServer::ExecFindOccurrences(McpTypedCommand& cmd)
+{
+	// find_occurrences is the same as search_disassembly (both use FindOccurrences)
+	return ExecSearchDisassembly(cmd);
 }

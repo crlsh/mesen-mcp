@@ -61,7 +61,10 @@ enum class McpCommandType {
 	GetFramebuffer,
 	StartFramebufferCapture,
 	StopFramebufferCapture,
-	GetFramebufferCaptureStatus
+	GetFramebufferCaptureStatus,
+	// STRUCTURAL: CE exports exposed as MCP tools — additive
+	SearchDisassembly,
+	FindOccurrences
 };
 
 struct McpTypedCommand {
@@ -91,6 +94,9 @@ struct McpTypedCommand {
 	bool fm2FileSpecified = false;
 	std::string summaryPath;     // start_control_flow_trace: where to write the dedup summary on Stop()
 	std::vector<int> values;     // block writes / frame-indexed input
+	// STRUCTURAL: params for SearchDisassembly/FindOccurrences — reuse McpTypedCommand, SRP (one struct per TCP command)
+	std::string searchString;    // search_disassembly, find_occurrences
+	bool matchCase = false;      // search_disassembly, find_occurrences
 
 	// Response channel: core sets, TCP thread waits (hard 30s timeout)
 	std::string response;
@@ -212,6 +218,9 @@ private:
 	std::string ExecStartFramebufferCapture(McpTypedCommand& cmd);
 	std::string ExecStopFramebufferCapture(McpTypedCommand& cmd);
 	std::string ExecGetFramebufferCaptureStatus(McpTypedCommand& cmd);
+	// STRUCTURAL: CE disassembly search exports — additive MCP tools
+	std::string ExecSearchDisassembly(McpTypedCommand& cmd);
+	std::string ExecFindOccurrences(McpTypedCommand& cmd);
 
 	static std::string OkResponse(int id, const std::string& resultJson);
 	static std::string ErrorResponse(int id, const std::string& error);
