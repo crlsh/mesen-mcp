@@ -1074,7 +1074,8 @@ AddressInfo BaseMapper::GetAbsoluteAddress(uint16_t relativeAddr)
 
 optional<PrgLocation> BaseMapper::ResolveCpuAddressToPrgOffset(uint16_t cpuAddr)
 {
-	return PrgMap::ResolveOffset(cpuAddr, _prgPages, _prgRom, _prgSize, InternalGetPrgPageSize());
+	// STRUCTURAL: CE renamed InternalGetPrgPageSize→GetPrgPageSize — follow CE API
+	return PrgMap::ResolveOffset(cpuAddr, _prgPages, _prgRom, _prgSize, GetPrgPageSize());
 }
 
 vector<PrgWindow> BaseMapper::GetCurrentPrgMap()

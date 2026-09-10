@@ -5,7 +5,9 @@
 #include "NES/NesConsole.h"
 #include "NES/BaseNesPpu.h"
 #include "NES/NesConstants.h"
-#include "Utilities/md5.h"
+// STRUCTURAL: CE removed md5.h; CRC32 is sufficient for framebuffer fingerprinting
+#include "Utilities/CRC32.h"
+#include "Utilities/HexUtilities.h"
 
 #include <algorithm>
 #include <cctype>
@@ -21,9 +23,9 @@ void McpFramebuffer::CaptureNesPixels(const uint16_t* pixels, uint32_t frame, Mc
 		snapshot.Data[i * 2] = (uint8_t)(pixels[i] & 0xFF);
 		snapshot.Data[i * 2 + 1] = (uint8_t)(pixels[i] >> 8);
 	}
-	snapshot.Hash = GetMd5Sum(snapshot.Data.data(), snapshot.Data.size());
-	std::transform(snapshot.Hash.begin(), snapshot.Hash.end(), snapshot.Hash.begin(),
-		[](unsigned char c) { return (char)std::tolower(c); });
+	// STRUCTURAL: CRC32 replaces MD5 for framebuffer fingerprint (CE removed md5.h)
+	uint32_t crc = CRC32::GetCRC(snapshot.Data.data(), (std::streamoff)snapshot.Data.size());
+	snapshot.Hash = HexUtilities::ToHex32(crc);
 }
 
 bool McpFramebuffer::CaptureNes(Emulator* emu, McpFramebufferSnapshot& snapshot, std::string& error)

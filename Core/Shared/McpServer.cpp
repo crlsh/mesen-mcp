@@ -635,7 +635,7 @@ void McpServer::ExecutePendingIntentions()
 								ControlDeviceState state;
 								state.State.push_back((uint8_t)(_coreState.stickyInputButtons & 0xFF));
 								controller->SetRawState(state);
-								controller->RefreshStateBuffer();
+								// STRUCTURAL: CE moved RefreshStateBuffer to protected; SetRawState suffices
 							}
 						}
 					}
@@ -1609,7 +1609,7 @@ std::string McpServer::ExecScanVariablesInternal(McpTypedCommand& cmd)
 			ControlDeviceState state;
 			state.State.push_back((uint8_t)(buttonMask & 0xFF));
 			controller->SetRawState(state);
-			controller->RefreshStateBuffer();
+			// STRUCTURAL: CE moved RefreshStateBuffer to protected; SetRawState suffices
 		}
 
 		for(int f = 0; f < frames; f++) {
@@ -1618,7 +1618,7 @@ std::string McpServer::ExecScanVariablesInternal(McpTypedCommand& cmd)
 				ControlDeviceState state;
 				state.State.push_back((uint8_t)(buttonMask & 0xFF));
 				controller->SetRawState(state);
-				controller->RefreshStateBuffer();
+				// STRUCTURAL: CE moved RefreshStateBuffer to protected; SetRawState suffices
 			}
 			console->RunFrame();
 		}
@@ -1628,7 +1628,7 @@ std::string McpServer::ExecScanVariablesInternal(McpTypedCommand& cmd)
 			ControlDeviceState state;
 			state.State.push_back(0);
 			controller->SetRawState(state);
-			controller->RefreshStateBuffer();
+			// STRUCTURAL: CE moved RefreshStateBuffer to protected; SetRawState suffices
 		}
 
 		// Snapshot after and diff
@@ -1862,7 +1862,7 @@ bool McpServer::SetInput(BaseControlDevice* device)
 			ControlDeviceState state;
 			state.State.push_back(_coreState.inputSequenceCurrentButtons);
 			device->SetRawState(state);
-			device->RefreshStateBuffer();
+			// STRUCTURAL: CE moved RefreshStateBuffer to protected; SetRawState suffices
 			return true;
 		}
 	}
@@ -1891,6 +1891,6 @@ bool McpServer::SetInput(BaseControlDevice* device)
 		state.State.push_back(sticky);
 		device->SetRawState(state);
 	}
-	device->RefreshStateBuffer();
+	// STRUCTURAL: CE moved RefreshStateBuffer to protected; SetRawState suffices
 	return true;
 }
