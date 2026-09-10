@@ -14,7 +14,7 @@ namespace Mesen.Debugger.Windows
 	public class LabelEditWindow : MesenWindow
 	{
 		private LabelEditViewModel _model;
-		
+
 		[Obsolete("For designer only")]
 		public LabelEditWindow() : this(new()) { }
 
@@ -25,9 +25,6 @@ namespace Mesen.Debugger.Windows
 			DataContext = model;
 			_model = model;
 
-#if DEBUG
-			this.AttachDevTools();
-#endif
 		}
 
 		private void InitializeComponent()

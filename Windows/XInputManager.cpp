@@ -51,7 +51,7 @@ void XInputManager::UpdateDeviceList()
 bool XInputManager::IsPressed(uint8_t gamepadPort, uint8_t button)
 {
 	if(_gamePadConnected[gamepadPort]) {
-		XINPUT_GAMEPAD &gamepad = _gamePadStates[gamepadPort].Gamepad;
+		XINPUT_GAMEPAD& gamepad = _gamePadStates[gamepadPort].Gamepad;
 		bool pressed = false;
 		if(button <= 16) {
 			WORD xinputButton = 1 << (button - 1);
@@ -89,6 +89,8 @@ optional<int16_t> XInputManager::GetAxisPosition(uint8_t port, int axis)
 			case 1: return gamepad.sThumbLX;
 			case 2: return gamepad.sThumbRY;
 			case 3: return gamepad.sThumbRX;
+			case 4: return gamepad.bLeftTrigger;
+			case 5: return gamepad.bRightTrigger;
 		}
 	}
 

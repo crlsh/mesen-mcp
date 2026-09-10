@@ -1,16 +1,17 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Data;
+using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
-using System;
-using System.Collections.Generic;
-using System.Reflection;
-using System.Linq;
 using Mesen.Config;
 using Mesen.Localization;
-using Avalonia.Interactivity;
-using Avalonia.Data;
+using Mesen.Utilities;
 using Mesen.ViewModels;
 using Mesen.Windows;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 
 namespace Mesen.Controls
 {
@@ -71,9 +72,9 @@ namespace Mesen.Controls
 
 		private void NavigateTo(ConfigWindowTab console)
 		{
-			if(VisualRoot is ConfigWindow wnd && wnd.DataContext is ConfigViewModel cfg) {
+			if(this.GetWindow()?.DataContext is ConfigViewModel cfg) {
 				cfg.SelectTab(console);
-				
+
 				switch(console) {
 					case ConfigWindowTab.Nes:
 						if(cfg.Nes != null) {
@@ -85,7 +86,7 @@ namespace Mesen.Controls
 							};
 						}
 						break;
-					
+
 					case ConfigWindowTab.Snes:
 						if(cfg.Snes != null) {
 							cfg.Snes.SelectedTab = ConfigType switch {
@@ -96,7 +97,7 @@ namespace Mesen.Controls
 							};
 						}
 						break;
-					
+
 					case ConfigWindowTab.Gameboy:
 						if(cfg.Gameboy != null) {
 							cfg.Gameboy.SelectedTab = ConfigType switch {

@@ -24,9 +24,6 @@ namespace Mesen.Windows
 			DataContext = model;
 
 			InitializeComponent();
-#if DEBUG
-			this.AttachDevTools();
-#endif
 		}
 
 		private void InitializeComponent()
@@ -48,7 +45,7 @@ namespace Mesen.Windows
 				MesenMsgBox.Show(null, "AutoUpdateNotSupported", MessageBoxButtons.OK, MessageBoxIcon.Info);
 				return;
 			}
-			
+
 			_model.Progress = 0;
 			_model.IsUpdating = true;
 

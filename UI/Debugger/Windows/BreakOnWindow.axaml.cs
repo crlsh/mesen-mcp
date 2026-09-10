@@ -5,15 +5,15 @@ using Avalonia.Markup.Xaml;
 using Mesen.Controls;
 using Mesen.Interop;
 using Mesen.Utilities;
-using ReactiveUI.Fody.Helpers;
+using CommunityToolkit.Mvvm.ComponentModel;
 using System;
 
 namespace Mesen.Debugger.Windows
 {
 	public class BreakOnWindow : MesenWindow
 	{
-		public static int _lastValue { get; set; } = 0;
-		
+		private static int _lastValue = 0;
+
 		public static readonly StyledProperty<int> ValueProperty = AvaloniaProperty.Register<BreakInWindow, int>(nameof(Value));
 		public static readonly StyledProperty<int?> MinProperty = AvaloniaProperty.Register<BreakInWindow, int?>(nameof(Min));
 		public static readonly StyledProperty<int?> MaxProperty = AvaloniaProperty.Register<BreakInWindow, int?>(nameof(Max));
@@ -53,9 +53,6 @@ namespace Mesen.Debugger.Windows
 			}
 
 			InitializeComponent();
-#if DEBUG
-			this.AttachDevTools();
-#endif
 		}
 
 		private void InitializeComponent()

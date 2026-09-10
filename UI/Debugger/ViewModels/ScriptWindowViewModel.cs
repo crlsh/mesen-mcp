@@ -1,62 +1,59 @@
 ﻿using Avalonia.Controls;
+using Avalonia.Threading;
+using CommunityToolkit.Mvvm.ComponentModel;
 using Mesen.Config;
 using Mesen.Debugger.Utilities;
 using Mesen.Debugger.Windows;
 using Mesen.Interop;
+using Mesen.Localization;
 using Mesen.Utilities;
 using Mesen.ViewModels;
 using Mesen.Windows;
-using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Reactive.Linq;
 using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
-using Mesen.Localization;
-using Avalonia.Threading;
 
 namespace Mesen.Debugger.ViewModels
 {
-	public class ScriptWindowViewModel : ViewModelBase
+	public partial class ScriptWindowViewModel : DisposableViewModel
 	{
 		public ScriptWindowConfig Config { get; } = ConfigManager.Config.Debug.ScriptWindow;
 
-		[Reactive] public string Code { get; set; } = "";
-		[Reactive] public string FilePath { get; set; } = "";
-		[Reactive] public int ScriptId { get; set; } = -1;
-		[Reactive] public string Log { get; set; } = "";
-		[Reactive] public string ScriptName { get; set; } = "";
+		[ObservableProperty] public partial string Code { get; set; } = "";
+		[ObservableProperty] public partial string FilePath { get; set; } = "";
+		[ObservableProperty] public partial int ScriptId { get; set; } = -1;
+		[ObservableProperty] public partial string Log { get; set; } = "";
+		[ObservableProperty] public partial string ScriptName { get; set; } = "";
 
-		[ObservableAsProperty] public string WindowTitle { get; } = "";
+		[ObservableProperty] public partial string WindowTitle { get; private set; } = "";
 
 		private string _originalText = "";
 		private ScriptWindow? _wnd = null;
 		private FileSystemWatcher _fileWatcher = new();
 
-		private ContextMenuAction _recentScriptsAction = new();
-
-		[Reactive] public List<ContextMenuAction> FileMenuActions { get; private set; } = new();
-		[Reactive] public List<ContextMenuAction> ScriptMenuActions { get; private set; } = new();
-		[Reactive] public List<ContextMenuAction> HelpMenuActions { get; private set; } = new();
-		[Reactive] public List<ContextMenuAction> ToolbarActions { get; private set; } = new();
+		[ObservableProperty] public partial List<ContextMenuAction> FileMenuActions { get; private set; } = new();
+		[ObservableProperty] public partial List<ContextMenuAction> ScriptMenuActions { get; private set; } = new();
+		[ObservableProperty] public partial List<ContextMenuAction> HelpMenuActions { get; private set; } = new();
+		[ObservableProperty] public partial List<ContextMenuAction> ToolbarActions { get; private set; } = new();
 
 		[Obsolete("For designer only")]
 		public ScriptWindowViewModel() : this(null) { }
 
 		public ScriptWindowViewModel(ScriptStartupBehavior? behavior)
 		{
-			this.WhenAnyValue(x => x.ScriptName).Select(x => {
+			this.AddDisposable(this.ObserveProp(nameof(ScriptName), () => {
 				string wndTitle = ResourceHelper.GetViewLabel(nameof(ScriptWindow), "wndTitle");
-				if(!string.IsNullOrWhiteSpace(x)) {
-					return wndTitle + " - " + x;
+				if(!string.IsNullOrWhiteSpace(ScriptName)) {
+					WindowTitle = wndTitle + " - " + ScriptName;
+				} else {
+					WindowTitle = wndTitle;
 				}
-				return wndTitle;
-			}).ToPropertyEx(this, x => x.WindowTitle);
+			}));
 
 			switch(behavior ?? Config.ScriptStartupBehavior) {
 				case ScriptStartupBehavior.ShowBlankWindow: break;
@@ -69,15 +66,21 @@ namespace Mesen.Debugger.ViewModels
 			}
 		}
 
+		protected override void DisposeView()
+		{
+			base.DisposeView();
+			_fileWatcher.Dispose();
+		}
+
 		public void InitActions(ScriptWindow wnd)
 		{
 			_wnd = wnd;
 
-			ScriptMenuActions = GetScriptMenuActions();
-			ToolbarActions = GetToolbarActions();
+			ScriptMenuActions = AddDisposables(GetScriptMenuActions());
+			ToolbarActions = AddDisposables(GetToolbarActions());
 
-			FileMenuActions = GetSharedFileActions();
-			FileMenuActions.AddRange(new List<ContextMenuAction>() {
+			FileMenuActions = AddDisposables(GetSharedFileActions());
+			FileMenuActions.AddRange(AddDisposables(new List<ContextMenuAction>() {
 				new ContextMenuAction() {
 					ActionType = ActionType.SaveAs,
 					OnClick = async () => await SaveAs(Path.GetFileName(FilePath))
@@ -108,9 +111,9 @@ namespace Mesen.Debugger.ViewModels
 					ActionType = ActionType.Exit,
 					OnClick = () => _wnd?.Close()
 				}
-			});
+			}));
 
-			HelpMenuActions = new() {
+			HelpMenuActions = AddDisposables(new List<ContextMenuAction>() {
 				new ContextMenuAction() {
 					ActionType = ActionType.HelpApiReference,
 					OnClick = () => {
@@ -120,7 +123,7 @@ namespace Mesen.Debugger.ViewModels
 						}
 					}
 				}
-			};
+			});
 
 			DebugShortcutManager.RegisterActions(_wnd, ScriptMenuActions);
 			DebugShortcutManager.RegisterActions(_wnd, FileMenuActions);
@@ -173,7 +176,7 @@ namespace Mesen.Debugger.ViewModels
 				ActionType = ActionType.BuiltInScripts,
 				AlwaysShowLabel = true,
 				SubActions = GetBuiltInScriptActions()
-			});			
+			});
 			return actions;
 		}
 
@@ -230,7 +233,7 @@ namespace Mesen.Debugger.ViewModels
 
 		private List<ContextMenuAction> GetScriptMenuActions()
 		{
-			 return new() {
+			return new() {
 				new ContextMenuAction() {
 					ActionType = ActionType.RunScript,
 					Shortcut = () => ConfigManager.Config.Debug.Shortcuts.Get(DebuggerShortcut.ScriptWindow_RunScript),
@@ -318,7 +321,7 @@ namespace Mesen.Debugger.ViewModels
 			FilePath = filename;
 			ScriptName = Path.GetFileName(filename);
 
-			_fileWatcher.EnableRaisingEvents = false;
+			_fileWatcher.Dispose();
 
 			_fileWatcher = new(Path.GetDirectoryName(FilePath) ?? "", Path.GetFileName(FilePath));
 			_fileWatcher.Changed += (s, e) => {
@@ -349,10 +352,15 @@ namespace Mesen.Debugger.ViewModels
 		{
 			if(!string.IsNullOrWhiteSpace(FilePath)) {
 				if(_originalText != Code) {
-					if(FileHelper.WriteAllText(FilePath, Code, Encoding.UTF8)) {
-						_originalText = Code;
-					} else {
-						return false;
+					_fileWatcher.EnableRaisingEvents = false;
+					try {
+						if(FileHelper.WriteAllText(FilePath, Code, Encoding.UTF8)) {
+							_originalText = Code;
+						} else {
+							return false;
+						}
+					} finally {
+						_fileWatcher.EnableRaisingEvents = true;
 					}
 				}
 				return true;

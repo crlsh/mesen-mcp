@@ -4,16 +4,16 @@ using Avalonia.Styling;
 using Mesen.Config;
 using Mesen.Config.Shortcuts;
 using Mesen.Utilities;
-using ReactiveUI.Fody.Helpers;
+using CommunityToolkit.Mvvm.ComponentModel;
 using System;
 using System.Collections.Generic;
 
 namespace Mesen.ViewModels
 {
-	public class PreferencesConfigViewModel : DisposableViewModel
+	public partial class PreferencesConfigViewModel : DisposableViewModel
 	{
-		[Reactive] public PreferencesConfig Config { get; set; }
-		[Reactive] public PreferencesConfig OriginalConfig { get; set; }
+		[ObservableProperty] public partial PreferencesConfig Config { get; set; }
+		[ObservableProperty] public partial PreferencesConfig OriginalConfig { get; set; }
 
 		public string DataStorageLocation { get; }
 		public bool IsOsx { get; }
@@ -77,7 +77,7 @@ namespace Mesen.ViewModels
 				EmulatorShortcut.ToggleSprites1,
 				EmulatorShortcut.ToggleSprites2,
 				EmulatorShortcut.EnableAllLayers,
-				
+
 				EmulatorShortcut.ToggleLagCounter,
 				EmulatorShortcut.ResetLagCounter,
 
@@ -93,7 +93,7 @@ namespace Mesen.ViewModels
 				EmulatorShortcut.DecreaseSpeed,
 
 				EmulatorShortcut.OpenFile,
-				
+
 				EmulatorShortcut.InputBarcode,
 				EmulatorShortcut.LoadTape,
 				EmulatorShortcut.RecordTape,
@@ -160,10 +160,10 @@ namespace Mesen.ViewModels
 				return;
 			}
 
-			AddDisposable(ReactiveHelper.RegisterRecursiveObserver(Config, (s, e) => { 
+			AddDisposable(ReactiveHelper.RegisterRecursiveObserver(Config, (s, e) => {
 				Config.ApplyConfig();
 				PreferencesConfig.UpdateTheme();
 			}));
 		}
-   }
+	}
 }

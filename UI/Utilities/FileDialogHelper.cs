@@ -1,12 +1,8 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Platform.Storage;
-using Avalonia.Platform.Storage.FileIO;
 using Avalonia.Rendering;
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 
 namespace Mesen.Utilities
@@ -16,7 +12,10 @@ namespace Mesen.Utilities
 		public const string RomExt = "[[ROMFILES]]";
 		public const string FirmwareExt = "[[FIRMWAREFILES]]";
 		public const string LabelFileExt = "[[LABELFILES]]";
+		public const string MovieFileExt = "[[MOVIEFILES]]";
 		public const string MesenMovieExt = "mmo";
+		public const string BizHawkMovieExt = "bk2";
+		public const string GbaHawkMovieExt = "gbmv";
 		public const string TblExt = "tbl";
 		public const string PaletteExt = "pal";
 		public const string TraceExt = "txt";
@@ -40,8 +39,9 @@ namespace Mesen.Utilities
 		public const string BinExt = "bin";
 		public const string NesExt = "nes";
 		public const string SufamiTurboExt = "st";
+		public const string SpcExt = "spc";
 
-		public static async Task<string?> OpenFile(string? initialFolder, IRenderRoot? parent, params string[] extensions)
+		public static async Task<string?> OpenFile(string? initialFolder, Window? parent, params string[] extensions)
 		{
 			if(!((parent ?? ApplicationHelper.GetMainWindow()) is Window wnd)) {
 				throw new Exception("Invalid parent window");
@@ -51,17 +51,19 @@ namespace Mesen.Utilities
 				List<FilePickerFileType> filter = new List<FilePickerFileType>();
 				foreach(string ext in extensions) {
 					if(ext == FileDialogHelper.RomExt) {
-						filter.Add(new FilePickerFileType("All supported files") { Patterns = new List<string>() { 
-							"*.sfc", "*.fig", "*.smc", "*.bs", "*.st", "*.spc",
-							"*.nes", "*.fds", "*.qd", "*.unif", "*.unf", "*.studybox", "*.nsf", "*.nsfe",
-							"*.gb", "*.gbc", "*.gbx", "*.gbs",
-							"*.pce", "*.sgx", "*.cue", "*.hes",
-							"*.sms", "*.gg", "*.sg", "*.col",
-							"*.gba",
-							"*.ws", "*.wsc",
-							"*.zip", "*.7z",
-							"*.ips", "*.bps"
-						} });
+						filter.Add(new FilePickerFileType("All supported files") {
+							Patterns = new List<string>() {
+								"*.sfc", "*.fig", "*.smc", "*.bs", "*.st", "*.spc",
+								"*.nes", "*.fds", "*.qd", "*.unif", "*.unf", "*.studybox", "*.nsf", "*.nsfe",
+								"*.gb", "*.gbc", "*.gbx", "*.gbs",
+								"*.pce", "*.sgx", "*.cue", "*.hes",
+								"*.sms", "*.gg", "*.sg", "*.col",
+								"*.gba",
+								"*.ws", "*.wsc", "*.pc2",
+								"*.zip", "*.7z",
+								"*.ips", "*.bps"
+							}
+						});
 						filter.Add(new FilePickerFileType("SNES ROM files") { Patterns = new List<string>() { "*.sfc", "*.fig", "*.smc", "*.bs", "*.st", "*.spc" } });
 						filter.Add(new FilePickerFileType("NES ROM files") { Patterns = new List<string>() { "*.nes", "*.fds", "*.qd", "*.unif", "*.unf", "*.studybox", "*.nsf", "*.nsfe" } });
 						filter.Add(new FilePickerFileType("GB ROM files") { Patterns = new List<string>() { "*.gb", "*.gbc", "*.gbx", "*.gbs" } });
@@ -70,12 +72,14 @@ namespace Mesen.Utilities
 						filter.Add(new FilePickerFileType("SMS / GG ROM files") { Patterns = new List<string>() { "*.sms", "*.gg" } });
 						filter.Add(new FilePickerFileType("SG-1000 ROM files") { Patterns = new List<string>() { "*.sg" } });
 						filter.Add(new FilePickerFileType("ColecoVision ROM files") { Patterns = new List<string>() { "*.col" } });
-						filter.Add(new FilePickerFileType("WonderSwan ROM files") { Patterns = new List<string>() { "*.ws", "*.wsc" } });
+						filter.Add(new FilePickerFileType("WonderSwan ROM files") { Patterns = new List<string>() { "*.ws", "*.wsc", "*.pc2" } });
 						filter.Add(new FilePickerFileType("Patch files (IPS/BPS)") { Patterns = new List<string>() { "*.ips", "*.bps" } });
 					} else if(ext == FileDialogHelper.FirmwareExt) {
-						filter.Add(new FilePickerFileType("All firmware files") { Patterns = new List<string>() { "*.sfc", "*.pce", "*.nes", "*.bin", "*.rom", "*.col", "*.sms", "*.gg", "*.gba" } });
+						filter.Add(new FilePickerFileType("All firmware files") { Patterns = new List<string>() { "*.sfc", "*.pce", "*.nes", "*.bin", "*.rom", "*.col", "*.sms", "*.gg", "*.gba", "*.ws", "*.wsc" } });
 					} else if(ext == FileDialogHelper.LabelFileExt) {
 						filter.Add(new FilePickerFileType("All label files") { Patterns = new List<string>() { "*.mlb", "*.sym", "*.dbg", "*.fns", "*.elf", "*.cdb" } });
+					} else if(ext == FileDialogHelper.MovieFileExt) {
+						filter.Add(new FilePickerFileType("All movies files") { Patterns = new List<string>() { "*.mmo", "*.bk2", "*.gbmv" } });
 					} else {
 						filter.Add(new FilePickerFileType(ext.ToUpper() + " files") { Patterns = new List<string>() { "*." + ext } });
 					}
@@ -97,7 +101,7 @@ namespace Mesen.Utilities
 			return null;
 		}
 
-		public static async Task<string?> SaveFile(string? initialFolder, string? initialFile, IRenderRoot? parent, params string[] extensions)
+		public static async Task<string?> SaveFile(string? initialFolder, string? initialFile, Window? parent, params string[] extensions)
 		{
 			if(!((parent ?? ApplicationHelper.GetMainWindow()) is Window wnd)) {
 				throw new Exception("Invalid parent window");
@@ -133,7 +137,7 @@ namespace Mesen.Utilities
 			return null;
 		}
 
-		public static async Task<string?> OpenFolder(IRenderRoot? parent)
+		public static async Task<string?> OpenFolder(Window? parent)
 		{
 			if(!((parent ?? ApplicationHelper.GetMainWindow()) is Window wnd)) {
 				throw new Exception("Invalid parent window");

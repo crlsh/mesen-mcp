@@ -25,7 +25,7 @@ namespace Mesen.Debugger.Controls
 			private bool _inStringView;
 			private double _rowHeight;
 			private string _hexFormat;
-			private string _fontFamily;
+			private SKTypeface _typeface;
 			private float _fontSize;
 			private double _stringViewPosition;
 			private IHexEditorDataProvider _dataProvider;
@@ -42,7 +42,7 @@ namespace Mesen.Debugger.Controls
 			{
 				_he = he;
 				Bounds = _he.Bounds;
-				_fontFamily = _he.FontFamily.Name;
+				_typeface = _he._skTypeface;
 				_fontSize = (float)_he.FontSize;
 				_bytesPerRow = _he.BytesPerRow;
 				_hexFormat = _he.HexFormat;
@@ -125,8 +125,7 @@ namespace Mesen.Debugger.Controls
 				SKPaint paint = new SKPaint();
 				paint.Color = new SKColor(ColorHelper.GetColor(color).ToUInt32());
 
-				SKTypeface typeface = SKTypeface.FromFamilyName(_fontFamily);
-				SKFont font = new SKFont(typeface, _fontSize);
+				SKFont font = new SKFont(_typeface, _fontSize);
 				SetFontProperties(font);
 
 				using var builder = new SKTextBlobBuilder();
@@ -154,7 +153,7 @@ namespace Mesen.Debugger.Controls
 					string rowText = sb.ToString();
 					int count = font.CountGlyphs(rowText);
 					var buffer = builder.AllocateRun(font, count, 0, (float)(row * _rowHeight + drawOffsetY));
-					font.GetGlyphs(rowText, buffer.GetGlyphSpan());
+					font.GetGlyphs(rowText, buffer.Glyphs);
 					row++;
 					sb.Clear();
 				}
@@ -202,9 +201,9 @@ namespace Mesen.Debugger.Controls
 						if(codepoint > 0x024F) {
 							SKRunBuffer measureBuffer = measureText.AllocateRun(altFont, altFont.CountGlyphs(str), 0, 0);
 							byteInfo.UseAltFont = true;
-							altFont.GetGlyphs(str, measureBuffer.GetGlyphSpan());
+							altFont.GetGlyphs(str, measureBuffer.Glyphs);
 							startPositionByByte[index] = (float)xPos;
-							xPos += altFont.MeasureText(measureBuffer.GetGlyphSpan());
+							xPos += altFont.MeasureText(measureBuffer.Glyphs);
 							endPositionByByte[index] = (float)xPos;
 						} else {
 							startPositionByByte[index] = (float)xPos;
@@ -232,8 +231,7 @@ namespace Mesen.Debugger.Controls
 				SKPaint paint = new SKPaint();
 				paint.Color = new SKColor(ColorHelper.GetColor(color).ToUInt32());
 
-				SKTypeface typeface = SKTypeface.FromFamilyName(_fontFamily);
-				SKFont monoFont = new SKFont(typeface, _fontSize);
+				SKFont monoFont = new SKFont(_typeface, _fontSize);
 				SetFontProperties(monoFont);
 
 				SKFont altFont = new SKFont(SKFontManager.Default.MatchCharacter('あ'), _fontSize);
@@ -284,7 +282,7 @@ namespace Mesen.Debugger.Controls
 
 							int count = currentFont.CountGlyphs(byteInfo.StringValue);
 							var buffer = builder.AllocateRun(currentFont, count, _he._startPositionByByte[pos + i], (float)(row * _rowHeight + drawOffsetY));
-							currentFont.GetGlyphs(byteInfo.StringValue, buffer.GetGlyphSpan());
+							currentFont.GetGlyphs(byteInfo.StringValue, buffer.Glyphs);
 						}
 
 						i += (byteInfo.StringValueKeyLength - 1);
@@ -411,7 +409,7 @@ namespace Mesen.Debugger.Controls
 			private Size _letterSize;
 			private int _bytesPerRow;
 			private double _rowHeight;
-			private string _fontFamily;
+			private SKTypeface _typeface;
 			private float _fontSize;
 			private IHexEditorDataProvider _dataProvider;
 			private double _headerCharLength;
@@ -428,8 +426,8 @@ namespace Mesen.Debugger.Controls
 			{
 				_he = he;
 				Bounds = _he.Bounds;
-				_fontFamily = _he.FontFamily.Name;
 				_fontSize = (float)_he.FontSize;
+				_typeface = _he._skTypeface;
 				_bytesPerRow = _he.BytesPerRow;
 				_rowHeight = _he.RowHeight;
 				_rowHeaderWidth = _he.RowHeaderWidth;
@@ -473,8 +471,7 @@ namespace Mesen.Debugger.Controls
 					SKPaint paint = new SKPaint();
 					paint.Color = new SKColor(ColorHelper.GetColor(_headerForeground).ToUInt32());
 
-					SKTypeface typeface = SKTypeface.FromFamilyName(_fontFamily);
-					SKFont font = new SKFont(typeface, _fontSize);
+					SKFont font = new SKFont(_typeface, _fontSize);
 					font.Edging = _skiaEdging;
 					font.Subpixel = _skiaSubpixelSmoothing;
 
@@ -501,7 +498,7 @@ namespace Mesen.Debugger.Controls
 						string rowText = headerByte.ToString("X" + _headerCharLength);
 						int count = font.CountGlyphs(rowText);
 						var buffer = builder.AllocateRun(font, count, (float)xOffset, (float)(row * _rowHeight + drawOffsetY));
-						font.GetGlyphs(rowText, buffer.GetGlyphSpan());
+						font.GetGlyphs(rowText, buffer.Glyphs);
 						row++;
 						y += _rowHeight;
 						headerByte += bytesPerRow;

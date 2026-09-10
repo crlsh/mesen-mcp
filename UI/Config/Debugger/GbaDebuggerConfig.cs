@@ -1,15 +1,15 @@
-﻿using ReactiveUI.Fody.Helpers;
-using Mesen.ViewModels;
+﻿using Mesen.ViewModels;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Mesen.Config;
 
-public class GbaDebuggerConfig : ViewModelBase
+public partial class GbaDebuggerConfig : ViewModelBase
 {
-	[Reactive] public bool BreakOnInvalidOpCode { get; set; } = false;
-	[Reactive] public bool BreakOnNopLoad { get; set; } = false;
-	[Reactive] public bool BreakOnUnalignedMemAccess { get; set; } = false;
-	
-	[Reactive] public GbaDisassemblyMode DisassemblyMode { get; set; } = GbaDisassemblyMode.Default;
+	[ObservableProperty] public partial bool BreakOnInvalidOpCode { get; set; } = false;
+	[ObservableProperty] public partial bool BreakOnNopLoad { get; set; } = false;
+	[ObservableProperty] public partial bool BreakOnUnalignedMemAccess { get; set; } = false;
+
+	[ObservableProperty] public partial GbaDisassemblyMode DisassemblyMode { get; set; } = GbaDisassemblyMode.Default;
 }
 
 public enum GbaDisassemblyMode : byte

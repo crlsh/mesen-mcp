@@ -1,10 +1,15 @@
 #include "pch.h"
 #include "SNES/Coprocessors/GSU/Gsu.h"
 #include "SNES/SnesCpu.h"
-#include "SNES/SnesMemoryManager.h"
 
 void Gsu::STOP()
 {
+	if(_isFx3) {
+		//The FX3 resets R15 to 0 when done - this allows the CPU to poll R15
+		//to know when it's done running
+		WriteRegister(15, 0);
+	}
+
 	if(!_state.IrqDisabled) {
 		_state.SFR.Irq = true;
 		_cpu->SetIrqSource(SnesIrqSource::Coprocessor);
@@ -99,7 +104,7 @@ void Gsu::JMP(uint8_t reg)
 		//LJMP
 		_state.ProgramBank = _state.R[reg] & 0x7F;
 		WriteRegister(15, ReadSrcReg());
-		
+
 		_state.CacheBase = _state.R[15] & 0xFFF0;
 		InvalidateCache();
 	} else {
@@ -169,7 +174,7 @@ void Gsu::LOOP()
 	_state.R[12]--;
 	_state.SFR.Zero = (_state.R[12] == 0);
 	_state.SFR.Sign = (_state.R[12] & 0x8000) != 0;
-	
+
 	//Loop until counter hits zero
 	if(!_state.SFR.Zero) {
 		WriteRegister(15, _state.R[13]);
@@ -199,12 +204,16 @@ void Gsu::ALT3()
 
 void Gsu::MERGE()
 {
-	uint16_t value = (_state.R[7] & 0xFF00) | (_state.R[8] >> 8);
-	WriteDestReg(value);
-	_state.SFR.Carry = (value & 0xE0E0) != 0;
-	_state.SFR.Overflow = (value & 0xC0C0) != 0;
-	_state.SFR.Sign = (value & 0x8080) != 0;
-	_state.SFR.Zero = (value & 0xF0F0) != 0;
+	if(!_isFx3) {
+		uint16_t value = (_state.R[7] & 0xFF00) | (_state.R[8] >> 8);
+		WriteDestReg(value);
+		_state.SFR.Carry = (value & 0xE0E0) != 0;
+		_state.SFR.Overflow = (value & 0xC0C0) != 0;
+		_state.SFR.Sign = (value & 0x8080) != 0;
+		_state.SFR.Zero = (value & 0xF0F0) != 0;
+	} else {
+		ProcessCommandFx3();
+	}
 	ResetFlags();
 }
 
@@ -288,7 +297,7 @@ void Gsu::MULT(uint8_t reg)
 		//MULT - Signed multiply
 		value = (uint16_t)((int8_t)ReadSrcReg() * (int8_t)operand);
 	}
-	
+
 	WriteDestReg(value);
 	_state.SFR.Sign = (value & 0x8000) != 0;
 	_state.SFR.Zero = value == 0;
@@ -380,7 +389,7 @@ void Gsu::LSR()
 {
 	uint16_t src = ReadSrcReg();
 	_state.SFR.Carry = (src & 0x01) != 0;
-	
+
 	uint16_t dst = src >> 1;
 	WriteDestReg(dst);
 	_state.SFR.Zero = dst == 0;
@@ -420,7 +429,7 @@ void Gsu::ASR()
 void Gsu::ROR()
 {
 	uint16_t src = ReadSrcReg();
-	
+
 	uint16_t dst = (src >> 1) | ((int)_state.SFR.Carry << 15);
 	_state.SFR.Carry = (src & 0x01) != 0;
 
@@ -629,7 +638,7 @@ uint8_t Gsu::ReadPixel(uint8_t x, uint8_t y)
 	WritePixelCache(_state.PrimaryCache);
 
 	uint32_t tileAddress = GetTileAddress(x, y);
-	
+
 	x = (x & 7) ^ 7;
 
 	uint8_t data = 0;
@@ -690,7 +699,7 @@ void Gsu::FlushPrimaryCache(uint8_t x, uint8_t y)
 	_state.PrimaryCache.Y = y;
 }
 
-void Gsu::WritePixelCache(GsuPixelCache &cache)
+void Gsu::WritePixelCache(GsuPixelCache& cache)
 {
 	if(cache.ValidBits == 0) {
 		return;
@@ -732,4 +741,50 @@ uint8_t Gsu::GetColor(uint8_t value)
 	}
 
 	return value;
+}
+
+void Gsu::ClearCharFx3(uint16_t offset)
+{
+	// clang-format off
+	static constexpr uint8_t clearPattern[64] = {
+		0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00,
+		0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00,
+
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+		0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,
+		0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF
+	};
+	// clang-format on
+
+	if(_gsuRamSize >= (uint32_t)(0x10000 + offset + 64)) {
+		memcpy(_gsuRam + 0x10000 + offset, clearPattern, 64);
+	}
+}
+
+void Gsu::ProcessClearCommandFx3(uint8_t start, uint8_t end)
+{
+	for(uint8_t i = 0; i < 18; i++) {
+		uint16_t offset = i * 64;
+		for(uint8_t j = start; j <= end; j++) {
+			ClearCharFx3(offset + j * 20 * 64);
+		}
+	}
+}
+
+void Gsu::ProcessCommandFx3()
+{
+	switch((Fx3Command)_state.R[0]) {
+		case Fx3Command::ClearA: ProcessClearCommandFx3(0, 8); break;
+		case Fx3Command::ClearB: ProcessClearCommandFx3(9, 17); break;
+		case Fx3Command::ClearC: ProcessClearCommandFx3(18, 26); break;
+
+		default:
+			//Anything else is a no-op
+			break;
+	}
 }

@@ -1,8 +1,7 @@
-﻿using Mesen.Interop;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
+using Mesen.Interop;
 using Mesen.Utilities;
 using Mesen.ViewModels;
-using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -14,12 +13,12 @@ using System.Threading.Tasks;
 
 namespace Mesen.Config
 {
-	public class GameConfig : BaseConfig<GameConfig>
+	public partial class GameConfig : BaseConfig<GameConfig>
 	{
-		[Reactive] public UInt32 DipSwitches { get; set; } = 0;
+		[ObservableProperty] public partial UInt32 DipSwitches { get; set; } = 0;
 
-		[Reactive] public bool OverrideOverscan { get; set; } = false;
-		[Reactive] public OverscanConfig Overscan { get; set; } = new();
+		[ObservableProperty] public partial bool OverrideOverscan { get; set; } = false;
+		[ObservableProperty] public partial OverscanConfig Overscan { get; set; } = new();
 
 		public void ApplyConfig()
 		{
@@ -45,7 +44,7 @@ namespace Mesen.Config
 					} catch { }
 				}
 			}
-			
+
 			cfg = new GameConfig();
 			cfg.DipSwitches = DipSwitchDatabase.GetGameDipswitches(romInfo.DipSwitches).DefaultDipSwitches;
 			return cfg;
@@ -62,7 +61,7 @@ namespace Mesen.Config
 	public struct InteropGameConfig
 	{
 		public UInt32 DipSwitches;
-		
+
 		[MarshalAs(UnmanagedType.I1)] public bool OverrideOverscan;
 		public InteropOverscanDimensions Overscan;
 	}

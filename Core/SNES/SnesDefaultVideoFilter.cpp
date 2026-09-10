@@ -1,7 +1,5 @@
 #include "pch.h"
-#include <algorithm>
 #include "SNES/SnesDefaultVideoFilter.h"
-#include "Shared/Video/DebugHud.h"
 #include "Shared/Emulator.h"
 #include "Shared/EmuSettings.h"
 #include "Shared/SettingTypes.h"
@@ -10,6 +8,10 @@
 SnesDefaultVideoFilter::SnesDefaultVideoFilter(Emulator* emu) : BaseVideoFilter(emu)
 {
 	InitLookupTable();
+}
+
+SnesDefaultVideoFilter::~SnesDefaultVideoFilter()
+{
 }
 
 FrameInfo SnesDefaultVideoFilter::GetFrameInfo()
@@ -44,6 +46,7 @@ OverscanDimensions SnesDefaultVideoFilter::GetOverscan()
 void SnesDefaultVideoFilter::InitLookupTable()
 {
 	VideoConfig config = _emu->GetSettings()->GetVideoConfig();
+	SnesConfig& snesConfig = _emu->GetSettings()->GetSnesConfig();
 
 	InitConversionMatrix(config.Hue, config.Saturation);
 
@@ -52,12 +55,16 @@ void SnesDefaultVideoFilter::InitLookupTable()
 		uint8_t g = ColorUtilities::Convert5BitTo8Bit((rgb555 >> 5) & 0x1F);
 		uint8_t b = ColorUtilities::Convert5BitTo8Bit((rgb555 >> 10) & 0x1F);
 
+		if(snesConfig.ColorCorrection == SnesColorCorrectionMode::NtscBlackLevel) {
+			ColorUtilities::ApplyNtscBlackLevel(r, g, b);
+		} else if(snesConfig.ColorCorrection == SnesColorCorrectionMode::DeepBlackBoost) {
+			ColorUtilities::ApplyDeepBlackBoost(r, g, b);
+		}
+
 		if(config.Hue != 0 || config.Saturation != 0 || config.Brightness != 0 || config.Contrast != 0) {
 			ApplyColorOptions(r, g, b, config.Brightness, config.Contrast);
-			_calculatedPalette[rgb555] = 0xFF000000 | (r << 16) | (g << 8) | b;
-		} else {
-			_calculatedPalette[rgb555] = 0xFF000000 | (r << 16) | (g << 8) | b;
 		}
+		_calculatedPalette[rgb555] = 0xFF000000 | (r << 16) | (g << 8) | b;
 	}
 
 	_videoConfig = config;
@@ -67,25 +74,27 @@ void SnesDefaultVideoFilter::OnBeforeApplyFilter()
 {
 	VideoConfig& config = _emu->GetSettings()->GetVideoConfig();
 	SnesConfig& snesConfig = _emu->GetSettings()->GetSnesConfig();
-	
-	if(_videoConfig.Hue != config.Hue || _videoConfig.Saturation != config.Saturation || _videoConfig.Contrast != config.Contrast || _videoConfig.Brightness != config.Brightness) {
+
+	if(_videoConfig.Hue != config.Hue || _videoConfig.Saturation != config.Saturation || _videoConfig.Contrast != config.Contrast || _videoConfig.Brightness != config.Brightness || _colorCorrection != snesConfig.ColorCorrection) {
 		InitLookupTable();
 	}
 	_forceFixedRes = snesConfig.ForceFixedResolution;
-	_blendHighRes = snesConfig.BlendHighResolutionModes;
+	_highResBlendMode = snesConfig.HighResBlendMode;
+	_colorCorrection = snesConfig.ColorCorrection;
 	_videoConfig = config;
+	_blendFilter.SetEnabled(_frame.Flags == FrameFlags::Interlaced && _emu->GetSettings()->GetSnesConfig().DeinterlaceMode == SnesDeinterlaceMode::BobBlend);
 }
 
-void SnesDefaultVideoFilter::ApplyFilter(uint16_t *ppuOutputBuffer)
+void SnesDefaultVideoFilter::ApplyFilter(uint16_t* ppuOutputBuffer)
 {
 	if(_emu->GetRomInfo().Format == RomFormat::Spc) {
 		return;
 	}
 
-	uint32_t *out = GetOutputBuffer();
+	uint32_t* out = GetOutputBuffer();
 	FrameInfo frameInfo = _frameInfo;
 	OverscanDimensions overscan = GetOverscan();
-	
+
 	uint32_t width = _baseFrameInfo.Width;
 	uint32_t xOffset = overscan.Left;
 	uint32_t yOffset = overscan.Top * width;
@@ -99,17 +108,37 @@ void SnesDefaultVideoFilter::ApplyFilter(uint16_t *ppuOutputBuffer)
 	} else {
 		for(uint32_t i = 0; i < frameInfo.Height; i++) {
 			for(uint32_t j = 0; j < frameInfo.Width; j++) {
-				out[i*frameInfo.Width+j] = GetPixel(ppuOutputBuffer, i * width + j + yOffset + xOffset);
+				out[i * frameInfo.Width + j] = GetPixel(ppuOutputBuffer, i * width + j + yOffset + xOffset);
 			}
 		}
 	}
 
-	if(_baseFrameInfo.Width == 512 && _blendHighRes) {
+	if(_baseFrameInfo.Width == 512) {
+		ApplyBlend(frameInfo, out);
+	}
+}
+
+void SnesDefaultVideoFilter::ApplyBlend(FrameInfo frameInfo, uint32_t* out)
+{
+	if(_highResBlendMode == SnesHighResBlendMode::None) {
+		return;
+	}
+
+	if(_highResBlendMode == SnesHighResBlendMode::BlendAll) {
 		//Very basic blend effect for high resolution modes
 		for(uint32_t i = 0; i < frameInfo.Height; i++) {
 			for(uint32_t j = 0; j < frameInfo.Width; j++) {
-				uint32_t &pixel1 = out[i*frameInfo.Width + j];
+				uint32_t& pixel1 = out[i * frameInfo.Width + j];
 				pixel1 = BlendPixels(pixel1, out[i * frameInfo.Width + j + 1]);
+			}
+		}
+	} else {
+		//Blend even-odd columns together (looks nice for fake transparency effects, but bad for high resolution text, etc.)
+		for(uint32_t i = 0; i < frameInfo.Height; i++) {
+			for(uint32_t j = 0; j < frameInfo.Width; j += 2) {
+				uint32_t& pixel1 = out[i * frameInfo.Width + j];
+				pixel1 = BlendPixels(pixel1, out[i * frameInfo.Width + j + 1]);
+				out[i * frameInfo.Width + j + 1] = pixel1;
 			}
 		}
 	}

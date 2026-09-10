@@ -1,5 +1,6 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Threading;
+using CommunityToolkit.Mvvm.ComponentModel;
 using Mesen.Config;
 using Mesen.Config.Shortcuts;
 using Mesen.Controls;
@@ -10,16 +11,12 @@ using Mesen.Interop;
 using Mesen.Localization;
 using Mesen.Utilities;
 using Mesen.Windows;
-using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using System.Reactive;
-using System.Reactive.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -27,18 +24,16 @@ using System.Threading.Tasks;
 
 namespace Mesen.ViewModels
 {
-	public class MainMenuViewModel : ViewModelBase
+	public partial class MainMenuViewModel : ViewModelBase
 	{
 		public MainWindowViewModel MainWindow { get; set; }
 
-		[Reactive] public List<object> FileMenuItems { get; set; } = new();
-		[Reactive] public List<object> GameMenuItems { get; set; } = new();
-		[Reactive] public List<object> OptionsMenuItems { get; set; } = new();
-		[Reactive] public List<object> ToolsMenuItems { get; set; } = new();
-		[Reactive] public List<object> DebugMenuItems { get; set; } = new();
-		[Reactive] public List<object> HelpMenuItems { get; set; } = new();
-		
-		[Reactive] private List<object> _netPlayControllers { get; set; } = new();
+		[ObservableProperty] public partial List<object> FileMenuItems { get; set; } = new();
+		[ObservableProperty] public partial List<object> GameMenuItems { get; set; } = new();
+		[ObservableProperty] public partial List<object> OptionsMenuItems { get; set; } = new();
+		[ObservableProperty] public partial List<object> ToolsMenuItems { get; set; } = new();
+		[ObservableProperty] public partial List<object> DebugMenuItems { get; set; } = new();
+		[ObservableProperty] public partial List<object> HelpMenuItems { get; set; } = new();
 
 		private RomInfo RomInfo => MainWindow.RomInfo;
 		private bool IsGameRunning => RomInfo.Format != RomFormat.Unknown;
@@ -46,6 +41,8 @@ namespace Mesen.ViewModels
 		private bool IsVsSystemGame => RomInfo.Format == RomFormat.VsSystem || RomInfo.Format == RomFormat.VsDualSystem;
 		private bool IsVsDualSystemGame => RomInfo.Format == RomFormat.VsDualSystem;
 		private List<RecentItem> RecentItems => ConfigManager.Config.RecentFiles.Items;
+
+		public bool AutoPaused { get; set; } = false;
 
 		private ConfigWindow? _cfgWindow = null;
 		private MainMenuAction _selectControllerAction = new();
@@ -62,7 +59,7 @@ namespace Mesen.ViewModels
 		{
 			if(_cfgWindow == null) {
 				_cfgWindow = new ConfigWindow(tab);
-				_cfgWindow.Closed += cfgWindow_Closed;
+				_cfgWindow.Closed += CfgWindow_Closed;
 				_cfgWindow.ShowCentered((Control)wnd);
 			} else {
 				(_cfgWindow.DataContext as ConfigViewModel)!.SelectTab(tab);
@@ -70,7 +67,7 @@ namespace Mesen.ViewModels
 			}
 		}
 
-		private void cfgWindow_Closed(object? sender, EventArgs e)
+		private void CfgWindow_Closed(object? sender, EventArgs e)
 		{
 			_cfgWindow = null;
 			if(ConfigManager.Config.Preferences.GameSelectionScreenMode == GameSelectionMode.Disabled && MainWindow.RecentGames.Visible) {
@@ -184,7 +181,7 @@ namespace Mesen.ViewModels
 			} else {
 				shortcut = (EmulatorShortcut)((int)EmulatorShortcut.LoadStateSlot1 + slot - 1);
 			}
-			
+
 			bool isAutoSaveSlot = slot == 11;
 
 			return new MainMenuAction(shortcut) {
@@ -215,17 +212,27 @@ namespace Mesen.ViewModels
 		private void InitGameMenu(MainWindow wnd)
 		{
 			GameMenuItems = new List<object>() {
-				new MainMenuAction(EmulatorShortcut.Pause) { ActionType = ActionType.Pause, IsVisible = () => !EmuApi.IsPaused() && (!ConfigManager.Config.Preferences.PauseWhenInMenusAndConfig || !EmuApi.IsRunning()) },
-				new MainMenuAction(EmulatorShortcut.Pause) { ActionType = ActionType.Resume, IsVisible = () => EmuApi.IsPaused() || (ConfigManager.Config.Preferences.PauseWhenInMenusAndConfig && EmuApi.IsRunning()) },
+				new MainMenuAction(EmulatorShortcut.Pause) { ActionType = ActionType.Pause, IsVisible = () => !EmuApi.IsPaused() && !ConfigManager.Config.Preferences.PauseWhenInMenusAndConfig },
+				new MainMenuAction(EmulatorShortcut.Pause) { ActionType = ActionType.Resume, IsVisible = () => EmuApi.IsPaused() && !ConfigManager.Config.Preferences.PauseWhenInMenusAndConfig },
+				new MainMenuAction(EmulatorShortcut.Pause) {
+					ActionType = ActionType.Resume,
+					IsVisible = () => ConfigManager.Config.Preferences.PauseWhenInMenusAndConfig && !AutoPaused,
+					OnClick = () => AutoPaused = true
+				},
+				new MainMenuAction(EmulatorShortcut.Pause) {
+					ActionType = ActionType.Pause,
+					IsVisible = () => ConfigManager.Config.Preferences.PauseWhenInMenusAndConfig && AutoPaused,
+					OnClick = () => AutoPaused = false
+				},
 				new ContextMenuSeparator(),
 				new MainMenuAction(EmulatorShortcut.Reset) { ActionType = ActionType.Reset },
 				new MainMenuAction(EmulatorShortcut.PowerCycle) { ActionType = ActionType.PowerCycle },
 				new MainMenuAction(EmulatorShortcut.ReloadRom) { ActionType = ActionType.ReloadRom },
 				new ContextMenuSeparator(),
 				new MainMenuAction(EmulatorShortcut.PowerOff) { ActionType = ActionType.PowerOff },
-				
+
 				new ContextMenuSeparator() { IsVisible = () => IsGameRunning && RomInfo.ConsoleType != ConsoleType.Gameboy && RomInfo.Format != RomFormat.GameGear && RomInfo.ConsoleType != ConsoleType.Gba },
-				new MainMenuAction() { 
+				new MainMenuAction() {
 					ActionType = ActionType.GameConfig,
 					IsVisible = () => IsGameRunning && RomInfo.ConsoleType != ConsoleType.Gameboy && RomInfo.Format != RomFormat.GameGear && RomInfo.ConsoleType != ConsoleType.Gba,
 					IsEnabled = () => IsGameRunning,
@@ -250,7 +257,7 @@ namespace Mesen.ViewModels
 						GetFdsInsertDiskItem(7),
 					}
 				},
-				
+
 				new MainMenuAction(EmulatorShortcut.FdsEjectDisk) {
 					ActionType = ActionType.EjectDisk,
 					IsVisible = () => IsFdsGame,
@@ -264,7 +271,7 @@ namespace Mesen.ViewModels
 				new MainMenuAction(EmulatorShortcut.VsInsertCoin4) { ActionType = ActionType.InsertCoin4, IsVisible = () => IsVsDualSystemGame },
 
 				new ContextMenuSeparator() { IsVisible = () => EmuApi.IsShortcutAllowed(EmulatorShortcut.InputBarcode) || EmuApi.IsShortcutAllowed(EmulatorShortcut.RecordTape) || EmuApi.IsShortcutAllowed(EmulatorShortcut.StopRecordTape) },
-				
+
 				new MainMenuAction(EmulatorShortcut.InputBarcode) {
 					ActionType = ActionType.InputBarcode,
 					IsVisible = () => EmuApi.IsShortcutAllowed(EmulatorShortcut.InputBarcode)
@@ -413,7 +420,7 @@ namespace Mesen.ViewModels
 					ActionType = ActionType.Region,
 					IsEnabled = () => IsGameRunning,
 					IsVisible = () => (
-						!IsGameRunning || 
+						!IsGameRunning ||
 						MainWindow.RomInfo.ConsoleType != ConsoleType.Gameboy && MainWindow.RomInfo.ConsoleType != ConsoleType.Gba
 					),
 					SubActions = new List<object>() {
@@ -431,6 +438,7 @@ namespace Mesen.ViewModels
 						GetWsModelMenuItem(WsModel.Monochrome),
 						GetWsModelMenuItem(WsModel.Color),
 						GetWsModelMenuItem(WsModel.SwanCrystal),
+						GetWsModelMenuItem(WsModel.PocketChallenge),
 					}
 				},
 
@@ -439,6 +447,7 @@ namespace Mesen.ViewModels
 					DynamicText = () => ResourceHelper.GetEnumText(ActionType.Region) + (MainWindow.RomInfo.ConsoleType != ConsoleType.Gameboy ? " (GB)" : ""),
 					IsVisible = () => IsGameRunning && MainWindow.RomInfo.CpuTypes.Contains(CpuType.Gameboy),
 					SubActions = new List<object>() {
+						GetGameboyModelMenuItem(GameboyModel.AutoFavorBest),
 						GetGameboyModelMenuItem(GameboyModel.AutoFavorGbc),
 						GetGameboyModelMenuItem(GameboyModel.AutoFavorSgb),
 						GetGameboyModelMenuItem(GameboyModel.AutoFavorGb),
@@ -708,7 +717,7 @@ namespace Mesen.ViewModels
 						ActionType = ActionType.Play,
 						IsEnabled = () => IsGameRunning && !RecordApi.MovieRecording() && !RecordApi.MoviePlaying(),
 						OnClick = async () => {
-							string? filename = await FileDialogHelper.OpenFile(ConfigManager.MovieFolder, wnd, FileDialogHelper.MesenMovieExt);
+							string? filename = await FileDialogHelper.OpenFile(ConfigManager.MovieFolder, wnd, FileDialogHelper.MovieFileExt);
 							if(filename != null) {
 								RecordApi.MoviePlay(filename);
 							}
@@ -762,12 +771,12 @@ namespace Mesen.ViewModels
 				GetVideoRecorderMenu(wnd),
 
 				new ContextMenuSeparator() {
-					IsVisible = () => MainWindow.RomInfo.ConsoleType == ConsoleType.Nes
+					IsVisible = () =>  MainWindow.RomInfo.ConsoleType == ConsoleType.Nes && MainWindow.RomInfo.Format != RomFormat.Nsf
 				},
 
 				new MainMenuAction() {
 					ActionType = ActionType.HdPacks,
-					IsVisible = () => MainWindow.RomInfo.ConsoleType == ConsoleType.Nes,
+					IsVisible = () => MainWindow.RomInfo.ConsoleType == ConsoleType.Nes && MainWindow.RomInfo.Format != RomFormat.Nsf,
 					SubActions = new List<object> {
 						new MainMenuAction() {
 							ActionType = ActionType.InstallHdPack,
@@ -783,7 +792,7 @@ namespace Mesen.ViewModels
 				},
 
 				new ContextMenuSeparator(),
-				
+
 				new MainMenuAction() {
 					ActionType = ActionType.LogWindow,
 					OnClick = () => {
@@ -793,6 +802,14 @@ namespace Mesen.ViewModels
 
 				new MainMenuAction(EmulatorShortcut.TakeScreenshot) {
 					ActionType = ActionType.TakeScreenshot,
+				},
+
+				new MainMenuAction() {
+					ActionType = ActionType.SaveSpcFile,
+					IsVisible = () => MainWindow.RomInfo.CpuTypes.Contains(CpuType.Spc),
+					OnClick = () => {
+						ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new SaveSpcFileWindow());
+					}
 				},
 			};
 		}
@@ -853,7 +870,7 @@ namespace Mesen.ViewModels
 			_selectControllerAction = new MainMenuAction() {
 				ActionType = ActionType.SelectController,
 				IsEnabled = () => NetplayApi.IsConnected() || NetplayApi.IsServerRunning(),
-				SubActions = _netPlayControllers
+				SubActions = new()
 			};
 
 			return new MainMenuAction() {
@@ -1163,7 +1180,7 @@ namespace Mesen.ViewModels
 					});
 				} else if(!silent) {
 					Dispatcher.UIThread.Post(() => {
-						 MesenMsgBox.Show(null, "MesenUpToDate", MessageBoxButtons.OK, MessageBoxIcon.Info);
+						MesenMsgBox.Show(null, "MesenUpToDate", MessageBoxButtons.OK, MessageBoxIcon.Info);
 					});
 				}
 			});

@@ -25,6 +25,7 @@ class GsuDebugger final : public IDebugger
 	Gsu* _gsu;
 	EmuSettings* _settings;
 
+	unique_ptr<CallstackManager> _callstackManager;
 	unique_ptr<BreakpointManager> _breakpointManager;
 	unique_ptr<GsuTraceLogger> _traceLogger;
 
@@ -53,6 +54,7 @@ public:
 	IAssembler* GetAssembler() override;
 	BaseEventManager* GetEventManager() override;
 	ITraceLogger* GetTraceLogger() override;
+	ISerializable* GetSerializableCpu() override;
 
 	BaseState& GetState() override;
 };

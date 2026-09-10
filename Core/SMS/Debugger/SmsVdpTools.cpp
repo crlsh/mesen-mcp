@@ -7,7 +7,7 @@
 #include "Debugger/MemoryDumper.h"
 #include "Shared/SettingTypes.h"
 
-SmsVdpTools::SmsVdpTools(Debugger* debugger, Emulator *emu, SmsConsole* console) : PpuTools(debugger, emu)
+SmsVdpTools::SmsVdpTools(Debugger* debugger, Emulator* emu, SmsConsole* console) : PpuTools(debugger, emu)
 {
 	_console = console;
 }
@@ -44,7 +44,7 @@ DebugTilemapInfo SmsVdpTools::GetTilemap(GetTilemapOptions options, BaseState& b
 		result.ColumnCount = 342;
 		result.Bpp = 8;
 		result.Format = TileFormat::DirectColor;
-		for(int i = 0, len = (int)(result.RowCount * result.ColumnCount); i < len; i+=2) {
+		for(int i = 0, len = (int)(result.RowCount * result.ColumnCount); i < len; i += 2) {
 			switch(_memAccess[i]) {
 				case SmsVdpMemAccess::None: outBuffer[i] = 0xFF606060; break;
 				case SmsVdpMemAccess::BgLoadTable: outBuffer[i] = 0xFF00FF00; break;
@@ -73,7 +73,7 @@ DebugTilemapInfo SmsVdpTools::GetTilemap(GetTilemapOptions options, BaseState& b
 	result.TilesetAddress = 0;
 	result.ScrollWidth = isGameGear ? 160 : 256;
 	result.ScrollHeight = isGameGear ? 144 : state.VisibleScanlineCount;
-	
+
 	uint8_t colorMask = 0xFF;
 	if(options.DisplayMode == TilemapDisplayMode::Grayscale) {
 		palette = (uint32_t*)_grayscaleColorsBpp4;
@@ -81,6 +81,8 @@ DebugTilemapInfo SmsVdpTools::GetTilemap(GetTilemapOptions options, BaseState& b
 	}
 
 	if(state.UseMode4) {
+		uint32_t bgColor = GetTilemapBackgroundColor(options.Background, palette[0]);
+
 		result.ScrollX = 256 - state.HorizontalScroll + (isGameGear ? 48 : 0);
 		result.ScrollY = state.VerticalScroll + (isGameGear ? 24 : 0);
 		result.TilemapAddress = state.EffectiveNametableAddress;
@@ -102,9 +104,8 @@ DebugTilemapInfo SmsVdpTools::GetTilemap(GetTilemapOptions options, BaseState& b
 						uint8_t tileColumn = hMirror ? 7 - (x & 0x07) : (x & 0x07);
 
 						uint8_t color = GetTilePixelColor<TileFormat::SmsBpp4>(vram, 0x3FFF, tileAddr, tileColumn);
-						uint16_t palAddr = color == 0 ? 0 : (paletteOffset + color);
 						uint32_t outPos = (row * 8 + y) * 32 * 8 + column * 8 + x;
-						outBuffer[outPos] = palette[palAddr & colorMask];
+						outBuffer[outPos] = color == 0 ? bgColor : palette[(paletteOffset + color) & colorMask];
 					}
 				}
 			}
@@ -203,7 +204,7 @@ DebugTilemapTileInfo SmsVdpTools::GetTilemapTileInfo(uint32_t x, uint32_t y, uin
 
 	uint8_t row = y / 8;
 	uint8_t column = x / result.Width;
-	
+
 	result.Row = row;
 	result.Column = column;
 
@@ -211,13 +212,13 @@ DebugTilemapTileInfo SmsVdpTools::GetTilemapTileInfo(uint32_t x, uint32_t y, uin
 		uint16_t ntIndex = (row << 5) + column;
 		uint16_t entryAddr = state.EffectiveNametableAddress + (ntIndex * 2);
 		uint16_t ntData = vram[entryAddr] | (vram[entryAddr + 1] << 8);
-	
+
 		uint8_t paletteOffset = ntData & 0x800 ? 0x10 : 0;
 		uint16_t tileIndex = ntData & 0x1FF;
 
 		result.TileMapAddress = entryAddr;
 		result.TileIndex = tileIndex;
-		result.TileAddress = tileIndex * 32;
+		result.AddAddress(tileIndex * 32);
 		result.PaletteIndex = paletteOffset >> 4;
 		result.PaletteAddress = paletteOffset;
 		result.HighPriority = (ntData & 0x1000) ? NullableBoolean::True : NullableBoolean::False;
@@ -230,7 +231,7 @@ DebugTilemapTileInfo SmsVdpTools::GetTilemapTileInfo(uint32_t x, uint32_t y, uin
 		uint16_t tileAddr = (state.BgPatternTableAddress & 0x3800) + (tileIndex * 8);
 		result.TileMapAddress = ntAddr;
 		result.TileIndex = tileIndex;
-		result.TileAddress = tileAddr;
+		result.AddAddress(tileAddr);
 	} else {
 		//Graphic 1 / Graphic 2 / Multicolor
 		uint16_t ntAddr = state.NametableAddress + (column + row * 32);
@@ -250,7 +251,7 @@ DebugTilemapTileInfo SmsVdpTools::GetTilemapTileInfo(uint32_t x, uint32_t y, uin
 		}
 		result.TileMapAddress = ntAddr;
 		result.TileIndex = tileIndex;
-		result.TileAddress = tileAddr;
+		result.AddAddress(tileAddr);
 
 		int32_t colorTableAddr;
 		if(state.M3_Use240LineMode) {
@@ -270,7 +271,7 @@ DebugTilemapTileInfo SmsVdpTools::GetTilemapTileInfo(uint32_t x, uint32_t y, uin
 void SmsVdpTools::GetSpritePreview(GetSpritePreviewOptions options, BaseState& baseState, DebugSpriteInfo* sprites, uint32_t* spritePreviews, uint32_t* palette, uint32_t* outBuffer)
 {
 	SmsVdpState& state = (SmsVdpState&)baseState;
-	
+
 	uint32_t bgColor = GetSpriteBackgroundColor(options.Background, palette, false);
 
 	std::fill(outBuffer, outBuffer + 256 * state.VisibleScanlineCount, bgColor);
@@ -294,7 +295,9 @@ void SmsVdpTools::GetSpritePreview(GetSpritePreviewOptions options, BaseState& b
 
 		for(int y = 0; y < sprite.Height; y++) {
 			for(int x = 0; x < sprite.Width; x++) {
-				if(spritePosY + y >= 256) {
+				if(sprite.X + x < 0) {
+					continue;
+				} else if(spritePosY + y >= 256) {
 					spritePosY -= 256;
 				}
 
@@ -304,7 +307,6 @@ void SmsVdpTools::GetSpritePreview(GetSpritePreviewOptions options, BaseState& b
 						continue;
 					}
 
-					//TODOSMS zoomed sprites support
 					outBuffer[((spritePosY + y) * 256) + sprite.X + x] = color;
 				} else {
 					spritePreview[y * sprite.Width + x] = bgColor;
@@ -335,7 +337,7 @@ DebugSpritePreviewInfo SmsVdpTools::GetSpritePreviewInfo(GetSpritePreviewOptions
 		info.VisibleWidth = 256;
 		info.VisibleHeight = state.VisibleScanlineCount;
 	}
-	
+
 	info.WrapBottomToTop = true;
 
 	return info;
@@ -349,11 +351,11 @@ void SmsVdpTools::GetSpriteInfo(DebugSpriteInfo& sprite, uint32_t* spritePreview
 	sprite.Format = state.UseMode4 ? TileFormat::SmsBpp4 : TileFormat::SmsSgBpp1;
 	sprite.SpriteIndex = i;
 	sprite.UseExtendedVram = false;
-	sprite.RawY = state.UseMode4 ? oam[i] : oam[i*4];
-	sprite.RawX = state.UseMode4 ? oam[0x80+i*2] : oam[i*4+1];
+	sprite.RawY = state.UseMode4 ? oam[i] : oam[i * 4];
+	sprite.RawX = state.UseMode4 ? oam[0x80 + i * 2] : oam[i * 4 + 1];
 	sprite.Y = sprite.RawY;
 	sprite.X = sprite.RawX;
-	
+
 	if(state.UseMode4) {
 		if(state.ShiftSpritesLeft) {
 			sprite.X -= 8;
@@ -364,18 +366,24 @@ void SmsVdpTools::GetSpriteInfo(DebugSpriteInfo& sprite, uint32_t* spritePreview
 		}
 	}
 
-	sprite.TileIndex = state.UseMode4 ? oam[0x80 + i * 2 + 1] : oam[i*4+2];
+	sprite.TileIndex = state.UseMode4 ? oam[0x80 + i * 2 + 1] : oam[i * 4 + 2];
 	sprite.UseSecondTable = NullableBoolean::Undefined;
 
-	sprite.Palette = state.UseMode4 ? 0 : (oam[i*4+3] & 0x0F);
+	sprite.Palette = state.UseMode4 ? 0 : (oam[i * 4 + 3] & 0x0F);
 	sprite.PaletteAddress = state.UseMode4 ? 0x10 : -1;
 	sprite.Priority = DebugSpritePriority::Undefined;
-	
+
 	bool largeSprites = state.UseLargeSprites;
 	sprite.Width = 8;
 	sprite.Height = largeSprites ? 16 : 8;
 	if(!state.UseMode4) {
 		sprite.Width = sprite.Height;
+	}
+
+	bool doubleSize = state.EnableDoubleSpriteSize && (!state.UseMode4 || _console->GetRevision() != SmsRevision::Sms1);
+	if(doubleSize) {
+		sprite.Width *= 2;
+		sprite.Height *= 2;
 	}
 
 	if(!state.UseMode4 && sprite.Palette == 0) {
@@ -408,14 +416,17 @@ void SmsVdpTools::GetSpriteInfo(DebugSpriteInfo& sprite, uint32_t* spritePreview
 	sprite.TileAddress = tileStart;
 
 	for(int y = 0; y < sprite.Height; y++) {
-		uint16_t pixelStart = tileStart + y * (state.UseMode4 ? 4 : 1);
+		int yPos = doubleSize ? (y >> 1) : y;
+		uint16_t pixelStart = tileStart + yPos * (state.UseMode4 ? 4 : 1);
 
 		for(int x = 0; x < sprite.Width; x++) {
+			int xPos = doubleSize ? (x >> 1) : x;
+
 			uint8_t color;
 			if(state.UseMode4) {
-				color = GetTilePixelColor<TileFormat::SmsBpp4>(vram, 0x3FFF, pixelStart, x);
+				color = GetTilePixelColor<TileFormat::SmsBpp4>(vram, 0x3FFF, pixelStart, xPos);
 			} else {
-				color = GetTilePixelColor<TileFormat::SmsSgBpp1>(vram, 0x3FFF, pixelStart + (x >= 8 ? 16 : 0), x & 0x07);
+				color = GetTilePixelColor<TileFormat::SmsSgBpp1>(vram, 0x3FFF, pixelStart + (xPos >= 8 ? 16 : 0), xPos & 0x07);
 			}
 
 			uint32_t outOffset = (y * sprite.Width) + x;
@@ -458,7 +469,7 @@ DebugPaletteInfo SmsVdpTools::GetPaletteInfo(GetPaletteInfoOptions options)
 	info.BgColorCount = 16;
 	info.SpriteColorCount = 16;
 	info.ColorsPerPalette = 16;
-	
+
 	if(state.UseMode4) {
 		info.ColorCount = 32;
 		info.SpritePaletteOffset = info.BgColorCount;

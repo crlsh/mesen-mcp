@@ -4,25 +4,13 @@
 #include "Shared/EmuSettings.h"
 #include "Shared/Emulator.h"
 #include "Shared/ColorUtilities.h"
-#include "Shared/RewindManager.h"
 
 WsDefaultVideoFilter::WsDefaultVideoFilter(Emulator* emu, WsConsole* console, bool applyNtscFilter) : BaseVideoFilter(emu), _ntscFilter(emu)
 {
 	_emu = emu;
 	_console = console;
 	_applyNtscFilter = applyNtscFilter;
-	_prevFrame = new uint16_t[WsConstants::MaxPixelCount];
 	InitLookupTable();
-}
-
-WsDefaultVideoFilter::~WsDefaultVideoFilter()
-{
-	delete[] _prevFrame;
-}
-
-uint32_t WsDefaultVideoFilter::BlendPixels(uint32_t a, uint32_t b)
-{
-	return ((((a) ^ (b)) & 0xfffefefeL) >> 1) + ((a) & (b));
 }
 
 void WsDefaultVideoFilter::InitLookupTable()
@@ -37,7 +25,7 @@ void WsDefaultVideoFilter::InitLookupTable()
 		uint8_t b = rgb444 & 0xF;
 
 		if(_adjustColors) {
-			if(_console->GetModel() == WsModel::Monochrome) {
+			if(!_console->IsColorModel()) {
 				//Same formula as what asie recently implemented for ares
 				auto applyGamma = [](uint32_t color, uint32_t min, uint32_t max) {
 					return min + (uint32_t)(pow(color / 15.0, 1 / 2.2) * (max - min));
@@ -92,11 +80,7 @@ void WsDefaultVideoFilter::OnBeforeApplyFilter()
 		_adjustColors = adjustColors;
 		InitLookupTable();
 	}
-	bool blendFrames = wsConfig.BlendFrames && !_emu->GetRewindManager()->IsRewinding() && !_emu->IsPaused();
-	if(_blendFrames != blendFrames) {
-		_blendFrames = blendFrames;
-		memset(_prevFrame, 0, WsConstants::MaxPixelCount * sizeof(uint16_t));
-	}
+	_blendFilter.SetEnabled(wsConfig.BlendFrames);
 	_videoConfig = config;
 }
 
@@ -105,22 +89,11 @@ void WsDefaultVideoFilter::ApplyFilter(uint16_t* ppuOutputBuffer)
 	uint32_t* out = GetOutputBuffer();
 	FrameInfo size = _baseFrameInfo;
 
-	if(_blendFrames && _prevFrameSize.Width == size.Width && _prevFrameSize.Height == size.Height) {
-		for(uint32_t i = 0, len = size.Height * size.Width; i < len; i++) {
-			out[i] = BlendPixels(_calculatedPalette[_prevFrame[i]], _calculatedPalette[ppuOutputBuffer[i]]);
-		}
-	} else {
-		for(uint32_t i = 0, len = size.Height * size.Width; i < len; i++) {
-			out[i] = _calculatedPalette[ppuOutputBuffer[i]];
-		}
-	}
-
-	if(_blendFrames) {
-		std::copy(ppuOutputBuffer, ppuOutputBuffer + WsConstants::MaxPixelCount, _prevFrame);
-		_prevFrameSize = size;
+	for(uint32_t i = 0, len = size.Height * size.Width; i < len; i++) {
+		out[i] = _calculatedPalette[ppuOutputBuffer[i]];
 	}
 
 	if(_applyNtscFilter) {
-		_ntscFilter.ApplyFilter(out, size.Width, size.Height, 0);
+		_ntscFilter.ApplyFilter(out, size.Width, size.Height, IsOddFrame());
 	}
 }

@@ -50,22 +50,23 @@
 #include "Shared/MemoryOperationType.h"
 #include "Shared/EventType.h"
 
-Emulator::Emulator() :
-	_settings(new EmuSettings(this)),
-	_debugHud(new DebugHud()),
-	_scriptHud(new DebugHud()),
-	_notificationManager(new NotificationManager()),
-	_batteryManager(new BatteryManager()),
-	_soundMixer(new SoundMixer(this)),
-	_videoRenderer(new VideoRenderer(this)),
-	_videoDecoder(new VideoDecoder(this)),
-	_saveStateManager(new SaveStateManager(this)),
-	_cheatManager(new CheatManager(this)),
-	_movieManager(new MovieManager(this)),
-	_historyViewer(new HistoryViewer(this)),
-	_gameServer(new GameServer(this)),
-	_gameClient(new GameClient(this)),
-	_rewindManager(new RewindManager(this))
+Emulator::Emulator()
+	: _settings(new EmuSettings(this)),
+	  _debugHud(new DebugHud()),
+	  _scriptHud(new DebugHud()),
+	  _notificationManager(new NotificationManager()),
+	  _batteryManager(new BatteryManager()),
+	  _soundMixer(new SoundMixer(this)),
+	  _videoRenderer(new VideoRenderer(this)),
+	  _videoDecoder(new VideoDecoder(this)),
+	  _saveStateManager(new SaveStateManager(this)),
+	  _cheatManager(new CheatManager(this)),
+	  _movieManager(new MovieManager(this)),
+	  _historyViewer(new HistoryViewer(this)),
+	  _gameServer(new GameServer(this)),
+	  _gameClient(new GameClient(this)),
+	  _rewindManager(new RewindManager(this)),
+	  _stats(new DebugStats())
 {
 	_paused = false;
 	_pauseOnNextFrame = false;
@@ -139,8 +140,8 @@ void Emulator::Run()
 
 	_emulationThreadId = std::this_thread::get_id();
 
+	_stats->ResetStats();
 	_frameDelay = GetFrameDelay();
-	_stats.reset(new DebugStats());
 	_frameLimiter.reset(new FrameLimiter(_frameDelay));
 	_lastFrameTimer.Reset();
 
@@ -233,6 +234,13 @@ void Emulator::RunFrameWithRunAhead()
 
 	//Run a single frame and save the state (no audio/video)
 	_isRunAheadFrame = true;
+
+	//Poll controllers again to try to ensure that the next frame starts with
+	//the current inputs instead of the inputs from the save state that just loaded.
+	//Depending on the timing at which each core polls inputs, this prevents
+	//adding a frame's worth of input lag (NES core was not affected by this)
+	_console->GetControlManager()->UpdateInputState();
+
 	_console->RunFrame();
 	Serialize(runAheadState, false, 0);
 
@@ -264,19 +272,21 @@ void Emulator::OnBeforeSendFrame()
 			_audioPlayerHud->Draw(GetFrameCount(), GetFps());
 		}
 
-		if(_stats && _settings->GetPreferences().ShowDebugInfo) {
+		if(_settings->GetPreferences().ShowDebugInfo) {
 			double lastFrameTime = _lastFrameTimer.GetElapsedMS();
 			_lastFrameTimer.Reset();
-			_stats->DisplayStats(this, lastFrameTime);
+			_stats->UpdateStats(this, false, lastFrameTime);
 		}
 	}
 }
 
 void Emulator::ProcessEndOfFrame()
 {
+	bool useSpinWait = !_settings->GetVideoConfig().DisableHighPrecisionFramePacing && (_settings->GetEmulationSpeed() >= 50 && _settings->GetEmulationSpeed() <= 200);
+
 	if(!_isRunAheadFrame) {
 		_frameLimiter->ProcessFrame();
-		while(_frameLimiter->WaitForNextFrame()) {
+		while(_frameLimiter->WaitForNextFrame(useSpinWait)) {
 			if(_stopFlag || _frameDelay != GetFrameDelay() || _paused || _pauseOnNextFrame || _lockCounter > 0) {
 				//Need to process another event, stop sleeping
 				break;
@@ -311,7 +321,7 @@ void Emulator::Stop(bool sendNotification, bool preventRecentGameSave, bool save
 
 	if(_console && saveBattery) {
 		//Only save battery on power off, otherwise SaveBattery() is called by LoadRom()
-		_console->SaveBattery();
+		SaveBattery();
 	}
 
 	if(!preventRecentGameSave && _console && !_settings->GetPreferences().DisableGameSelectionScreen && !_audioPlayerHud) {
@@ -363,7 +373,7 @@ void Emulator::Reset()
 void Emulator::ReloadRom(bool forPowerCycle)
 {
 	RomInfo info = GetRomInfo();
-	
+
 	//Cast RomFile/PatchFile to string to make sure the file is reloaded from the disk
 	//In some scenarios, the file might be in memory already, which will prevent the reload
 	//from actually reloading the rom from the disk.
@@ -424,13 +434,13 @@ bool Emulator::InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool 
 	//Once emulation is stopped, warn the UI that a game is about to be loaded
 	//This allows the UI to finish processing pending calls to the debug tools, etc.
 	_notificationManager->SendNotification(ConsoleNotificationType::BeforeGameLoad);
-	
+
 	bool wasPaused = IsPaused();
 
 	//Keep a reference to the original debugger
 	shared_ptr<Debugger> debugger = _debugger.lock();
 	bool debuggerActive = debugger != nullptr;
-	
+
 	//Unset _debugger to ensure nothing calls the debugger while initializing the new rom
 	ResetDebugger();
 
@@ -444,7 +454,7 @@ bool Emulator::InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool 
 
 	if(_console) {
 		//Make sure the battery is saved to disk before we load another game (or reload the same game)
-		_console->SaveBattery();
+		SaveBattery();
 	}
 
 	_soundMixer->StopAudio();
@@ -463,11 +473,12 @@ bool Emulator::InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool 
 	//Try loading the rom, give priority to file extension, then trying to check for file signatures if extension is unknown
 	TryLoadRom(romFile, result, console, false);
 	TryLoadRom(romFile, result, console, true);
-	
+
 	if(result != LoadRomResult::Success) {
 		MessageManager::DisplayMessage("Error", "CouldNotLoadFile", romFile.GetFileName());
 		if(debugger) {
 			_debugger.reset(debugger);
+			_internalDebugger = _debugger.get();
 			debugger->ResetSuspendCounter();
 		}
 		_blockDebuggerRequestCount--;
@@ -515,6 +526,8 @@ bool Emulator::InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool 
 	//Restore pollcounter (used by movies when a power cycle is in the movie)
 	_console->GetControlManager()->SetPollCounter(pollCounter);
 
+	_notificationManager->SendNotification(ConsoleNotificationType::AfterInitConsole);
+
 	_rewindManager->InitHistory();
 
 	if(debuggerActive || _settings->CheckFlag(EmulationFlags::ConsoleMode)) {
@@ -535,7 +548,7 @@ bool Emulator::InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool 
 	//deadlocks with DebugBreakHelper if GameLoaded event starts the debugger
 	_blockDebuggerRequestCount--;
 	dbgLock.Release();
-	
+
 	_threadPaused = true;
 	bool needPause = wasPaused && _debugger;
 	if(needPause) {
@@ -543,7 +556,7 @@ bool Emulator::InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool 
 		//(must be done after setting _threadPaused to true)
 		_debugger->Step(GetCpuTypes()[0], 1, StepType::Step, BreakSource::Pause);
 	}
-	
+
 	GameLoadedEventParams params = { needPause, forPowerCycle };
 	_notificationManager->SendNotification(ConsoleNotificationType::GameLoaded, &params);
 	_threadPaused = false;
@@ -570,7 +583,7 @@ void Emulator::InitConsole(unique_ptr<IConsole>& newConsole, ConsoleMemoryInfo o
 	if(preserveRom && _console) {
 		//When power cycling, copy over the content of any ROM memory from the previous instance
 		magic_enum::enum_for_each<MemoryType>([&](MemoryType memType) {
-			if(DebugUtilities::IsRom(memType)) {
+			if(DebugUtilities::IsCartRom(memType)) {
 				uint32_t orgSize = originalConsoleMemory[(int)memType].Size;
 				if(orgSize > 0 && GetMemory(memType).Size == orgSize) {
 					memcpy(_consoleMemory[(int)memType].Memory, originalConsoleMemory[(int)memType].Memory, orgSize);
@@ -625,6 +638,14 @@ void Emulator::TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_pt
 	}
 }
 
+void Emulator::SaveBattery()
+{
+	_console->SaveBattery();
+	if(_console->GetControlManager()) {
+		_console->GetControlManager()->SaveBattery();
+	}
+}
+
 string Emulator::GetHash(HashType type)
 {
 	shared_ptr<IConsole> console = _console.lock();
@@ -652,8 +673,12 @@ PpuFrameInfo Emulator::GetPpuFrame()
 
 ConsoleRegion Emulator::GetRegion()
 {
+	//Returns last active region when no console is active
 	shared_ptr<IConsole> console = GetConsole();
-	return console ? console->GetRegion() : ConsoleRegion::Ntsc;
+	if(console) {
+		_lastRegion = console->GetRegion();
+	}
+	return _lastRegion;
 }
 
 shared_ptr<IConsole> Emulator::GetConsole()
@@ -679,7 +704,7 @@ ConsoleType Emulator::GetConsoleType()
 vector<CpuType> Emulator::GetCpuTypes()
 {
 	shared_ptr<IConsole> console = GetConsole();
-	return console ? console->GetCpuTypes() : vector<CpuType>{};
+	return console ? console->GetCpuTypes() : vector<CpuType> {};
 }
 
 TimingInfo Emulator::GetTimingInfo(CpuType cpuType)
@@ -713,7 +738,12 @@ uint32_t Emulator::GetMasterClockRate()
 
 uint32_t Emulator::GetFrameCount()
 {
-	return GetPpuFrame().FrameCount;
+	if(IsEmulationThread()) {
+		return _console ? _console->GetFrameCount() : 0;
+	} else {
+		shared_ptr<IConsole> console = GetConsole();
+		return console ? console->GetFrameCount() : 0;
+	}
 }
 
 uint32_t Emulator::GetLagCounter()
@@ -865,7 +895,7 @@ void Emulator::WaitForPauseEnd()
 	PlatformUtilities::DisableScreensaver();
 	PlatformUtilities::EnableHighResolutionTimer();
 
-	while(!_stopFlag && !_runLock.TryAcquire(50)) { }
+	while(!_stopFlag && !_runLock.TryAcquire(50)) {}
 
 	if(!_stopFlag) {
 		_notificationManager->SendNotification(ConsoleNotificationType::GameResumed);
@@ -952,18 +982,24 @@ DeserializeResult Emulator::Deserialize(istream& in, uint32_t fileFormatVersion,
 		return DeserializeResult::InvalidFile;
 	}
 
-	if(includeSettings) {
-		SV(_settings);
+	//ValidateSaveStateCompatibility is used to validate if save states can be loaded
+	//This can be rejected is usually if the console type is different (e.g NES vs SNES) but can sometimes
+	//be allowed (e.g loading a SNES+SGB save state on a GB)
+	//Sometimes the save state will be rejected even on the same system (for example loading a regular NES save state while in VS DualSystem mode).
+	//Note: These checks are only done when called from SaveStateManager (not internally via the RewindManager, etc.)
+	optional<SaveStateCompatInfo> optCompatInfo = srcConsoleType.has_value() ? _console->ValidateSaveStateCompatibility(s, srcConsoleType.value()) : std::nullopt;
+	if(optCompatInfo.has_value() && !optCompatInfo.value().IsCompatible) {
+		MessageManager::DisplayMessage("SaveStates", "SaveStateWrongSystem");
+		return DeserializeResult::SpecificError;
 	}
 
 	if(srcConsoleType.has_value() && srcConsoleType.value() != _console->GetConsoleType()) {
-		//Used to allow save states taken on GB/GBC/SGB to be loaded on any of the 3 systems
-		SaveStateCompatInfo compatInfo = _console->ValidateSaveStateCompatibility(srcConsoleType.value());
-		if(!compatInfo.IsCompatible) {
+		if(!optCompatInfo.has_value()) {
 			MessageManager::DisplayMessage("SaveStates", "SaveStateWrongSystem");
 			return DeserializeResult::SpecificError;
 		}
 
+		SaveStateCompatInfo compatInfo = optCompatInfo.value();
 		s.RemoveKeys(compatInfo.FieldsToRemove);
 
 		if(!compatInfo.PrefixToAdd.empty()) {
@@ -976,6 +1012,10 @@ DeserializeResult Emulator::Deserialize(istream& in, uint32_t fileFormatVersion,
 			MessageManager::DisplayMessage("SaveStates", "SaveStateWrongSystem");
 			return DeserializeResult::SpecificError;
 		}
+	}
+
+	if(includeSettings) {
+		SV(_settings);
 	}
 
 	s.Stream(_console, "");
@@ -1078,10 +1118,12 @@ void Emulator::ResetDebugger(bool startDebugger)
 
 	if(_emulationThreadId == std::this_thread::get_id()) {
 		_debugger.reset(startDebugger ? new Debugger(this, _console.get()) : nullptr);
+		_internalDebugger = _debugger.get();
 	} else {
 		//Need to pause emulator to change _debugger (when not called from the emulation thread)
 		auto emuLock = AcquireLock();
 		_debugger.reset(startDebugger ? new Debugger(this, _console.get()) : nullptr);
+		_internalDebugger = _debugger.get();
 	}
 }
 
@@ -1140,6 +1182,9 @@ void Emulator::SetStopCode(int32_t stopCode)
 
 void Emulator::RegisterMemory(MemoryType type, void* memory, uint32_t size)
 {
+	if(_isDebuggerDisabled) {
+		return;
+	}
 	_consoleMemory[(int)type] = { memory, size };
 }
 
@@ -1174,24 +1219,30 @@ void Emulator::ProcessAudioPlayerAction(AudioPlayerActionParams p)
 
 void Emulator::ProcessEvent(EventType type, std::optional<CpuType> cpuType)
 {
-	if(_debugger) {
-		_debugger->ProcessEvent(type, cpuType);
+	if(_internalDebugger) {
+		_internalDebugger->ProcessEvent(type, cpuType);
 	}
 }
 
 template<CpuType cpuType>
 void Emulator::AddDebugEvent(DebugEventType evtType)
 {
-	if(_debugger) {
-		_debugger->GetEventManager(cpuType)->AddEvent(evtType);
+	if(_internalDebugger) {
+		_internalDebugger->GetEventManager(cpuType)->AddEvent(evtType);
 	}
 }
 
 void Emulator::BreakIfDebugging(CpuType sourceCpu, BreakSource source)
 {
-	if(_debugger) {
-		_debugger->BreakImmediately(sourceCpu, source);
+	if(_internalDebugger) {
+		_internalDebugger->BreakImmediately(sourceCpu, source);
 	}
+}
+
+void Emulator::SetDebuggerDisabled(bool disabled)
+{
+	_isDebuggerDisabled = disabled;
+	_internalDebugger = disabled ? nullptr : _debugger.get();
 }
 
 template void Emulator::AddDebugEvent<CpuType::Snes>(DebugEventType evtType);

@@ -30,7 +30,7 @@ public class WsRegisterViewer
 		WsPpuState ppu = ws.Ppu;
 
 		byte volumeLevel = 0;
-		if(ws.Model == WsModel.Monochrome) {
+		if(ws.Model == WsModel.Monochrome || ws.Model == WsModel.PocketChallenge) {
 			switch(ws.Apu.InternalMasterVolume) {
 				default: case 0: volumeLevel = 0; break;
 				case 1: volumeLevel = 2; break;
@@ -371,6 +371,15 @@ public class WsRegisterViewer
 			new RegEntry("$C3", "ROM1 Bank", cart.SelectedBanks[3], Format.X8),
 		});
 
+		if(cart.CartType == WsCartType.Bandai2003 || cart.CartType == WsCartType.WonderWitch) {
+			entries.AddRange(new List<RegEntry>() {
+				new RegEntry("$CE.0", "ROM in RAM Bank", cart.RomInRamBank),
+				new RegEntry("$D0", "Extended RAM Bank", cart.ExtSelectedBanks[0], Format.X16),
+				new RegEntry("$D2", "Extended ROM0 Bank", cart.ExtSelectedBanks[1], Format.X16),
+				new RegEntry("$D4", "Extended ROM1 Bank", cart.ExtSelectedBanks[2], Format.X16)
+			});
+		}
+
 		if(ws.CartEeprom.Size != WsEepromSize.Size0) {
 			entries.AddRange(new List<RegEntry>() {
 				new RegEntry("", "Cart EEPROM"),
@@ -380,6 +389,16 @@ public class WsRegisterViewer
 				new RegEntry("$C8.0", "Read Done", ws.CartEeprom.ReadDone),
 				new RegEntry("$C8.1", "Idle", ws.CartEeprom.Idle),
 				new RegEntry("", "Write Disabled", ws.CartEeprom.WriteDisabled)
+			});
+		}
+
+		if(cart.CartType == WsCartType.Bandai2003 || cart.CartType == WsCartType.WonderWitch) {
+			entries.AddRange(new List<RegEntry>() {
+				new RegEntry("", "Cart RTC"),
+				new RegEntry("$CA.0-3", "Command", ws.CartRtc.Command, Format.X8),
+				new RegEntry("$CA.4", "Busy", ws.CartRtc.Busy),
+				new RegEntry("$CA.7", "Ready", ws.CartRtc.Ready),
+				new RegEntry("$CB", "Data", ws.CartRtc.Data)
 			});
 		}
 
@@ -406,7 +425,7 @@ public class WsRegisterViewer
 
 			new RegEntry("$A0", "System Control"),
 			new RegEntry("$A0.0", "Boot ROM Disabled", mm.BootRomDisabled),
-			new RegEntry("$A0.1", "Color System", ws.Model != WsModel.Monochrome),
+			new RegEntry("$A0.1", "Color System", ws.Model != WsModel.Monochrome && ws.Model != WsModel.PocketChallenge),
 			new RegEntry("$A0.2", "16-bit ROM Bus", mm.CartWordBus),
 			new RegEntry("$A0.3", "ROM Wait State", mm.SlowRom),
 

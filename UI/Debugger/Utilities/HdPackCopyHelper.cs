@@ -1,4 +1,5 @@
 ﻿using Avalonia;
+using Avalonia.Input.Platform;
 using Mesen.Interop;
 using Mesen.Utilities;
 using System;
@@ -62,7 +63,7 @@ namespace Mesen.Debugger.Utilities
 		{
 			AddressInfo addr = new AddressInfo() { Address = address, Type = memoryType };
 			string hdPackTile = HdPackCopyHelper.ToHdPackFormat(addr, palette, paletteIndex, forSprite);
-			
+
 			if(isLargeSprite && hdPackTile.Length > 0) {
 				//Also copy the bottom tile's information to the clipboard
 				addr.Address += 16;

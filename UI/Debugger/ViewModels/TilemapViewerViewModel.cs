@@ -1,9 +1,11 @@
 ﻿using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input.Platform;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using CommunityToolkit.Mvvm.ComponentModel;
 using Mesen.Config;
 using Mesen.Debugger.Controls;
 using Mesen.Debugger.Utilities;
@@ -11,8 +13,6 @@ using Mesen.Debugger.Windows;
 using Mesen.Interop;
 using Mesen.Utilities;
 using Mesen.ViewModels;
-using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
@@ -20,37 +20,37 @@ using System.Threading;
 
 namespace Mesen.Debugger.ViewModels
 {
-	public class TilemapViewerViewModel : DisposableViewModel, ICpuTypeModel, IMouseOverViewerModel
+	public partial class TilemapViewerViewModel : DisposableViewModel, ICpuTypeModel, IMouseOverViewerModel
 	{
-		[Reactive] public CpuType CpuType { get; set; }
-		[Reactive] public bool IsNes { get; private set; }
+		[ObservableProperty] public partial CpuType CpuType { get; set; }
+		[ObservableProperty] public partial bool IsNes { get; private set; }
 
 		public TilemapViewerConfig Config { get; }
-		public RefreshTimingViewModel RefreshTiming { get; }
+		[ObservableProperty] public partial RefreshTimingViewModel RefreshTiming { get; private set; }
 
-		[Reactive] public Rect SelectionRect { get; set; }
-		[Reactive] public int GridSizeX { get; set; } = 8;
-		[Reactive] public int GridSizeY { get; set; } = 8;
+		[ObservableProperty] public partial Rect SelectionRect { get; set; }
+		[ObservableProperty] public partial int GridSizeX { get; set; } = 8;
+		[ObservableProperty] public partial int GridSizeY { get; set; } = 8;
 
-		[Reactive] public List<GridDefinition>? CustomGrids { get; set; } = null;
+		[ObservableProperty] public partial List<GridDefinition>? CustomGrids { get; set; } = null;
 
-		[Reactive] public DynamicBitmap ViewerBitmap { get; private set; }
+		[ObservableProperty] public partial DynamicBitmap ViewerBitmap { get; private set; }
 
-		[Reactive] public DynamicTooltip TilemapInfoPanel { get; private set; } = new DynamicTooltip();
-		[Reactive] public bool IsTilemapInfoVisible { get; private set; }
+		[ObservableProperty] public partial DynamicTooltip TilemapInfoPanel { get; private set; } = new DynamicTooltip();
+		[ObservableProperty] public partial bool IsTilemapInfoVisible { get; private set; }
 
-		[Reactive] public DynamicTooltip? PreviewPanel { get; private set; }
-		[Reactive] public DynamicTooltip? ViewerTooltip { get; set; }
-		[Reactive] public PixelPoint? ViewerMousePos { get; set; }
+		[ObservableProperty] public partial DynamicTooltip? PreviewPanel { get; private set; }
+		[ObservableProperty] public partial DynamicTooltip? ViewerTooltip { get; set; }
+		[ObservableProperty] public partial PixelPoint? ViewerMousePos { get; set; }
 
-		[Reactive] public List<TilemapViewerTab> Tabs { get; private set; } = new List<TilemapViewerTab>();
-		[Reactive] public bool ShowTabs { get; private set; }
-		[Reactive] public TilemapViewerTab SelectedTab { get; set; }
+		[ObservableProperty] public partial List<TilemapViewerTab> Tabs { get; private set; } = new List<TilemapViewerTab>();
+		[ObservableProperty] public partial bool ShowTabs { get; private set; }
+		[ObservableProperty] public partial TilemapViewerTab SelectedTab { get; set; }
 
-		[Reactive] public Rect ScrollOverlayRect { get; private set; }
-		[Reactive] public List<PictureViewerLine>? OverlayLines { get; private set; } = null;
+		[ObservableProperty] public partial Rect ScrollOverlayRect { get; private set; }
+		[ObservableProperty] public partial List<PictureViewerLine>? OverlayLines { get; private set; } = null;
 
-		[Reactive] public Enum[] AvailableDisplayModes { get; set; } = Array.Empty<Enum>();
+		[ObservableProperty] public partial Enum[] AvailableDisplayModes { get; set; } = Array.Empty<Enum>();
 
 		public List<object> FileMenuActions { get; } = new();
 		public List<object> ViewMenuActions { get; } = new();
@@ -63,6 +63,7 @@ namespace Mesen.Debugger.ViewModels
 		private bool _refreshDataOnTabChange;
 		private bool _inGameLoaded;
 		private bool _refreshPending;
+		private PixelRect _previewCropRect;
 
 		[Obsolete("For designer only")]
 		public TilemapViewerViewModel() : this(CpuType.Snes, new(), new(), null) { }
@@ -71,7 +72,6 @@ namespace Mesen.Debugger.ViewModels
 		{
 			Config = ConfigManager.Config.Debug.TilemapViewer.Clone();
 			CpuType = cpuType;
-			RefreshTiming = new RefreshTimingViewModel(Config.RefreshTiming, cpuType);
 
 			_picViewer = picViewer;
 			InitForCpuType();
@@ -85,6 +85,11 @@ namespace Mesen.Debugger.ViewModels
 					ActionType = ActionType.ExportToPng,
 					Shortcut = () => ConfigManager.Config.Debug.Shortcuts.Get(DebuggerShortcut.SaveAsPng),
 					OnClick = () => _picViewer.ExportToPng()
+				},
+				new ContextMenuAction() {
+					ActionType = ActionType.CopyToClipboard,
+					Shortcut = () => ConfigManager.Config.Debug.Shortcuts.Get(DebuggerShortcut.Copy),
+					OnClick = () => _picViewer.CopyToClipboard()
 				},
 				new ContextMenuSeparator(),
 				new ContextMenuAction() {
@@ -161,6 +166,11 @@ namespace Mesen.Debugger.ViewModels
 				},
 				new ContextMenuSeparator(),
 				new ContextMenuAction() {
+					ActionType = ActionType.CopyToClipboard,
+					OnClick = () => wnd.Clipboard?.SetBitmapAsync(ViewerBitmap.CropBitmap(_previewCropRect))
+				},
+				new ContextMenuSeparator(),
+				new ContextMenuAction() {
 					ActionType = ActionType.EditTile,
 					Shortcut = () => ConfigManager.Config.Debug.Shortcuts.Get(DebuggerShortcut.TilemapViewer_EditTile),
 					OnClick = () => EditTileGrid(1, 1, wnd)
@@ -205,10 +215,10 @@ namespace Mesen.Debugger.ViewModels
 						}
 					}
 				},
-				new ContextMenuSeparator() { IsVisible = () => CpuType == CpuType.Nes },
+				new ContextMenuSeparator() { IsVisible = () => IsNes },
 				new ContextMenuAction() {
 					ActionType = ActionType.CopyToHdPackFormat,
-					IsVisible = () => CpuType == CpuType.Nes,
+					IsVisible = () => IsNes,
 					IsEnabled = () => HdPackCopyHelper.IsActionAllowed(GetVramMemoryType()),
 					OnClick = () => {
 						DebugTilemapTileInfo? tile = GetSelectedTileInfo();
@@ -219,8 +229,11 @@ namespace Mesen.Debugger.ViewModels
 				}
 			}));
 
-			AddDisposable(this.WhenAnyValue(x => x.Tabs).Subscribe(x => ShowTabs = x.Count > 1));
-			AddDisposable(this.WhenAnyValue(x => x.SelectedTab).Subscribe(x => {
+			picViewer.ContextMenu?.Opening += ContextMenu_Opening;
+
+			AddDisposable(this.ObserveProp(nameof(Tabs), () => ShowTabs = Tabs.Count > 1));
+			AddDisposable(this.ObserveProp(nameof(SelectionRect), () => UpdatePreviewPanel()));
+			AddDisposable(this.ObserveProp(nameof(SelectedTab), () => {
 				if(_inGameLoaded) {
 					//Skip refresh data/tab if this is triggered while processing a gameloaded event
 					//Otherwise RefreshTab will be called on the old game's data, causing a crash.
@@ -233,34 +246,46 @@ namespace Mesen.Debugger.ViewModels
 					RefreshTab();
 				}
 			}));
-			AddDisposable(this.WhenAnyValue(x => x.SelectionRect).Subscribe(x => UpdatePreviewPanel()));
+
 			AddDisposable(ReactiveHelper.RegisterRecursiveObserver(Config, Config_PropertyChanged));
-			
+
 			InitNesGridOptions();
 
 			DebugShortcutManager.RegisterActions(wnd, FileMenuActions);
 			DebugShortcutManager.RegisterActions(wnd, ViewMenuActions);
 		}
 
+		private void ContextMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
+		{
+			if(GetSelectedTileInfo() == null) {
+				e.Cancel = true;
+			}
+		}
+
 		private void InitNesGridOptions()
 		{
-			AddDisposable(this.WhenAnyValue(x => x.Config.NesShowAttributeGrid, x => x.Config.NesShowAttributeByteGrid, x => x.Config.NesShowTilemapGrid, x => x.CpuType).Subscribe(x => {
-				if(CpuType == CpuType.Nes) {
-					List<GridDefinition> grids = new();
-					if(Config.NesShowAttributeGrid) {
-						grids.Add(new() { SizeX = 16, SizeY = 16, Color = Colors.Red });
-					}
-					if(Config.NesShowAttributeByteGrid) {
-						grids.Add(new() { SizeX = 32, SizeY = 32, Color = Colors.LightGreen, RestartY = 240 });
-					}
-					if(Config.NesShowTilemapGrid) {
-						grids.Add(new() { SizeX = 256, SizeY = 240, Color = Colors.LightGray });
-					}
-					CustomGrids = grids;
-				} else {
-					CustomGrids = null;
+			AddDisposable(Config.ObserveProp([nameof(Config.NesShowAttributeGrid), nameof(Config.NesShowAttributeByteGrid), nameof(Config.NesShowTilemapGrid)], UpdateCustomGrid));
+			AddDisposable(this.ObserveProp(nameof(CpuType), UpdateCustomGrid));
+		}
+
+		private void UpdateCustomGrid()
+		{
+			if(CpuType == CpuType.Nes) {
+				List<GridDefinition> grids = new();
+				if(Config.NesShowAttributeGrid) {
+					grids.Add(new() { SizeX = 16, SizeY = 16, Color = Colors.Red });
 				}
-			}));
+				if(Config.NesShowAttributeByteGrid) {
+					grids.Add(new() { SizeX = 32, SizeY = 32, Color = Colors.LightGreen, RestartY = 240 });
+				}
+				if(Config.NesShowTilemapGrid) {
+					grids.Add(new() { SizeX = 256, SizeY = 240, Color = Colors.LightGray });
+				}
+				CustomGrids = grids;
+			} else {
+				CustomGrids = null;
+			}
+
 		}
 
 		private async void EditBreakpoint(Window wnd, int address)
@@ -294,8 +319,10 @@ namespace Mesen.Debugger.ViewModels
 			}
 		}
 
+		[MemberNotNull(nameof(RefreshTiming))]
 		private void InitForCpuType()
 		{
+			RefreshTiming = new RefreshTimingViewModel(Config.RefreshTiming, CpuType);
 			IsNes = CpuType == CpuType.Nes;
 
 			if(IsNes) {
@@ -436,7 +463,8 @@ namespace Mesen.Debugger.ViewModels
 				AccessCounters = accessCounters,
 				TileHighlightMode = Config.TileHighlightMode,
 				AttributeHighlightMode = Config.AttributeHighlightMode,
-				DisplayMode = Config.DisplayMode
+				DisplayMode = Config.DisplayMode,
+				Background = Config.Background
 			};
 		}
 
@@ -453,7 +481,17 @@ namespace Mesen.Debugger.ViewModels
 				BaseState ppuState = DebugApi.GetPpuState(CpuType);
 				_coreData.PpuState = ppuState;
 				_coreData.PpuToolsState = DebugApi.GetPpuToolsState(CpuType);
-				_coreData.PrevVram = _coreData.Vram;
+
+				if(CpuType == CpuType.Nes) {
+					//This is only used for the NES' tilemap viewer, avoid doing this for other consoles
+					if(_coreData.PrevVram.Length != _coreData.Vram.Length) {
+						_coreData.PrevVram = new byte[_coreData.Vram.Length];
+					}
+					Array.Copy(_coreData.Vram, _coreData.PrevVram, _coreData.PrevVram.Length);
+				} else {
+					_coreData.PrevVram = Array.Empty<byte>();
+				}
+
 				DebugApi.GetMemoryState(GetVramMemoryType(), ref _coreData.Vram);
 				DebugApi.GetMemoryAccessCounts(GetVramMemoryType(), ref _coreData.AccessCounters);
 
@@ -563,7 +601,7 @@ namespace Mesen.Debugger.ViewModels
 			DebugTilemapInfo info = _data.TilemapInfo;
 			entries.StartUpdate();
 			entries.AddEntry("Size", info.ColumnCount + "x" + info.RowCount);
-			entries.AddEntry("Size (px)", info.ColumnCount* info.TileWidth + "x" + info.RowCount* info.TileHeight);
+			entries.AddEntry("Size (px)", info.ColumnCount * info.TileWidth + "x" + info.RowCount * info.TileHeight);
 			entries.AddEntry("Tilemap Address", FormatAddress((int)info.TilemapAddress));
 			entries.AddEntry("Tileset Address", FormatAddress((int)info.TilesetAddress));
 			entries.AddEntry("Tile Format", info.Format);
@@ -593,6 +631,8 @@ namespace Mesen.Debugger.ViewModels
 			TooltipEntries entries = tooltipToUpdate?.Items ?? new();
 			PixelRect cropRect = new PixelRect(p.X / tileInfo.Width * tileInfo.Width, p.Y / tileInfo.Height * tileInfo.Height, tileInfo.Width, tileInfo.Height);
 
+			_previewCropRect = cropRect;
+
 			entries.StartUpdate();
 
 			if(tileInfo.Width == 1 && tileInfo.Height == 1) {
@@ -610,7 +650,7 @@ namespace Mesen.Debugger.ViewModels
 			if(tileInfo.Width != 1 || tileInfo.Height != 1) {
 				entries.AddEntry("Column, Row", $"{tileInfo.Column}, {tileInfo.Row}");
 			}
-			entries.AddEntry("X, Y", $"{tileInfo.Column*tileInfo.Width}, {tileInfo.Row*tileInfo.Height}");
+			entries.AddEntry("X, Y", $"{tileInfo.Column * tileInfo.Width}, {tileInfo.Row * tileInfo.Height}");
 			entries.AddEntry("Size", tileInfo.Width + "x" + tileInfo.Height);
 
 			if(tileInfo.TileMapAddress >= 0) {
@@ -689,7 +729,7 @@ namespace Mesen.Debugger.ViewModels
 		{
 			return new ContextMenuAction() {
 				ActionType = ActionType.Custom,
-				CustomText = $"{columnCount}x{rowCount} ({GridSizeX * columnCount}px x {GridSizeY * rowCount}px)",
+				DynamicText = () => $"{columnCount}x{rowCount} ({GridSizeX * columnCount}px x {GridSizeY * rowCount}px)",
 				OnClick = () => EditTileGrid(columnCount, rowCount, wnd)
 			};
 		}
@@ -701,12 +741,33 @@ namespace Mesen.Debugger.ViewModels
 			}
 
 			PixelPoint p = ViewerMousePos ?? PixelPoint.FromPoint(SelectionRect.TopLeft, 1);
-			List<AddressInfo> addresses = new();
+			List<TileAddressInfo> addresses = new();
 			MemoryType memType = GetVramMemoryType();
 			int palette = -1;
+			bool doubleWidth = false;
+			bool doubleHeight = false;
+			TileFormat format = _data.TilemapInfo.Format;
+			int tileWidth = GridSizeX;
+			int tileHeight = GridSizeY;
+
+			PixelSize size = format.GetTileSize();
+
+			//On the SNES, the tile size may be 8x8, but the tilemap is defined in 16x16 (or 16x8) blocks.
+			//In this scenario, adjust the column/row count fetch the data for each part of the tilemap entry separately
+			doubleWidth = tileWidth == size.Width * 2;
+			if(doubleWidth) {
+				columnCount *= 2;
+				tileWidth /= 2;
+			}
+			doubleHeight = tileHeight == size.Height * 2;
+			if(doubleHeight) {
+				rowCount *= 2;
+				tileHeight /= 2;
+			}
+
 			for(int row = 0; row < rowCount; row++) {
 				for(int col = 0; col < columnCount; col++) {
-					DebugTilemapTileInfo? tile = DebugApi.GetTilemapTileInfo((uint)(p.X + GridSizeX*col), (uint)(p.Y + GridSizeY*row), CpuType, GetOptions(SelectedTab), _data.Vram, _data.PpuState, _data.PpuToolsState);
+					DebugTilemapTileInfo? tile = DebugApi.GetTilemapTileInfo((uint)(p.X + tileWidth * col), (uint)(p.Y + tileHeight * row), CpuType, GetOptions(SelectedTab), _data.Vram, _data.PpuState, _data.PpuToolsState);
 					if(tile == null) {
 						if(col == 0) {
 							rowCount = row;
@@ -720,7 +781,20 @@ namespace Mesen.Debugger.ViewModels
 					if(palette == -1) {
 						palette = tile.Value.PaletteIndex;
 					}
-					addresses.Add(new AddressInfo() { Address = tile.Value.TileAddress, Type = memType });
+
+					bool hMirror = tile.Value.HorizontalMirroring == NullableBoolean.True;
+					bool vMirror = tile.Value.VerticalMirroring == NullableBoolean.True;
+
+					int colIndex = hMirror ? (~col & 0x01) : (col & 0x01);
+					int rowIndex = vMirror ? (~row & 0x01) : (row & 0x01);
+					int tileAddrIndex = (doubleWidth ? colIndex : 0) + (doubleHeight ? rowIndex * 2 : 0);
+					if(tileAddrIndex < tile.Value.TileCount) {
+						addresses.Add(new TileAddressInfo() {
+							Address = new AddressInfo() { Address = (int)tile.Value.TileAddresses[tileAddrIndex], Type = memType },
+							HorizontalMirroring = hMirror,
+							VerticalMirroring = vMirror
+						});
+					}
 				}
 			}
 
@@ -736,8 +810,8 @@ namespace Mesen.Debugger.ViewModels
 				palette,
 				wnd,
 				CpuType,
-				RefreshTiming.Config.RefreshScanline,
-				RefreshTiming.Config.RefreshCycle
+				RefreshTiming.ConsoleConfig.RefreshScanline,
+				RefreshTiming.ConsoleConfig.RefreshCycle
 			);
 		}
 
@@ -748,7 +822,8 @@ namespace Mesen.Debugger.ViewModels
 
 				Point prevStart = new();
 				Point prevEnd = new();
-				void AddLine(Point start, Point end, Color color) {
+				void AddLine(Point start, Point end, Color color)
+				{
 					if(start != prevStart && end != prevEnd) {
 						lines.Add(new PictureViewerLine() { Start = start, End = end, Width = 1.5, Color = color });
 						prevStart = start;
@@ -769,7 +844,8 @@ namespace Mesen.Debugger.ViewModels
 
 						AddLine(new Point(startX, startY), new Point(endX, endY), alphaColor);
 						if(!ppuState.Mode7.LargeMap) {
-							void Translate(ref int start, ref int end, int offset, Func<int, bool> predicate) {
+							void Translate(ref int start, ref int end, int offset, Func<int, bool> predicate)
+							{
 								while(predicate(start) || predicate(end)) {
 									start += offset;
 									end += offset;
@@ -802,12 +878,12 @@ namespace Mesen.Debugger.ViewModels
 		}
 	}
 
-	public class TilemapViewerTab : ViewModelBase
+	public partial class TilemapViewerTab : ViewModelBase
 	{
-		[Reactive] public string Title { get; set; } = "";
-		[Reactive] public int Layer { get; set; }  = 0;
-		[Reactive] public MemoryType? VramMemoryType { get; set; }
-		[Reactive] public bool Enabled { get; set; } = true;
+		[ObservableProperty] public partial string Title { get; set; } = "";
+		[ObservableProperty] public partial int Layer { get; set; } = 0;
+		[ObservableProperty] public partial MemoryType? VramMemoryType { get; set; }
+		[ObservableProperty] public partial bool Enabled { get; set; } = true;
 	}
 
 	public class TilemapViewerData

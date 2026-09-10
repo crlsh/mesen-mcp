@@ -1,29 +1,28 @@
-﻿using ReactiveUI.Fody.Helpers;
+﻿using Avalonia.Collections;
+using Avalonia.Controls;
+using Avalonia.Controls.Selection;
+using CommunityToolkit.Mvvm.ComponentModel;
+using DataBoxControl;
+using Mesen.Config;
+using Mesen.Debugger.Utilities;
+using Mesen.Debugger.Windows;
+using Mesen.Interop;
+using Mesen.Utilities;
+using Mesen.ViewModels;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Reactive.Linq;
-using System.Linq;
-using Mesen.Interop;
-using Mesen.Debugger.Utilities;
-using Mesen.Config;
-using Mesen.Debugger.Windows;
-using Avalonia.Controls;
-using Mesen.ViewModels;
 using System.ComponentModel;
-using Mesen.Utilities;
-using System.Collections;
-using DataBoxControl;
-using Avalonia.Collections;
-using Avalonia.Controls.Selection;
+using System.Linq;
 
 namespace Mesen.Debugger.ViewModels
 {
-	public class BreakpointListViewModel : DisposableViewModel
+	public partial class BreakpointListViewModel : DisposableViewModel
 	{
-		[Reactive] public MesenList<BreakpointViewModel> Breakpoints { get; private set; } = new();
-		[Reactive] public SelectionModel<BreakpointViewModel?> Selection { get; set; } = new() { SingleSelect = false };
-		[Reactive] public SortState SortState { get; set; } = new();
+		[ObservableProperty] public partial MesenList<BreakpointViewModel> Breakpoints { get; private set; } = new();
+		[ObservableProperty] public partial SelectionModel<BreakpointViewModel?> Selection { get; set; } = new() { SingleSelect = false };
+		[ObservableProperty] public partial SortState SortState { get; set; } = new();
 		public List<int> ColumnWidths { get; } = ConfigManager.Config.Debug.Debugger.BreakpointListColumnWidths;
 
 		public CpuType CpuType { get; }
@@ -56,7 +55,7 @@ namespace Mesen.Debugger.ViewModels
 			List<int> selectedIndexes = Selection.SelectedIndexes.ToList();
 
 			List<BreakpointViewModel> sortedBreakpoints = BreakpointManager.GetBreakpoints(CpuType).Select(bp => new BreakpointViewModel(bp)).ToList();
-			
+
 			if(SortState.SortOrder.Count > 0) {
 				SortHelper.SortList(sortedBreakpoints, SortState.SortOrder, _comparers, "Address");
 			}

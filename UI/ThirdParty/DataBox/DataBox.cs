@@ -1,4 +1,18 @@
-﻿using System;
+﻿using Avalonia;
+using Avalonia.Collections;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Selection;
+using Avalonia.Data;
+using Avalonia.Input;
+using Avalonia.Input.Platform;
+using Avalonia.Interactivity;
+using Avalonia.Media;
+using Avalonia.Metadata;
+using Avalonia.Threading;
+using DataBoxControl.Primitives;
+using Mesen.Utilities;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -6,38 +20,21 @@ using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Windows.Input;
-using Avalonia;
-using Avalonia.Collections;
-using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
-using Avalonia.Controls.Selection;
-using Avalonia.Data;
-using Avalonia.Input;
-using Avalonia.Interactivity;
-using Avalonia.Markup.Xaml.MarkupExtensions;
-using Avalonia.Media;
-using Avalonia.Metadata;
-using Avalonia.Threading;
-using DataBoxControl.Controls;
-using DataBoxControl.Primitives;
-using DynamicData;
-using Mesen.Utilities;
-using ReactiveUI;
 
 namespace DataBoxControl;
 
 public class DataBox : TemplatedControl
 {
-    public static readonly DirectProperty<DataBox, IEnumerable?> ItemsProperty =
-		  AvaloniaProperty.RegisterDirect<DataBox, IEnumerable?>(
-			  nameof(Items),
-            o => o.Items, 
-            (o, v) => {
-					o.Items = v;
-					if(o.Selection != null) {
-						o.Selection.Source = v;
-					}
-				});
+	public static readonly DirectProperty<DataBox, IEnumerable?> ItemsProperty =
+		 AvaloniaProperty.RegisterDirect<DataBox, IEnumerable?>(
+			 nameof(Items),
+			  o => o.Items,
+			  (o, v) => {
+				  o.Items = v;
+				  if(o.Selection != null) {
+					  o.Selection.Source = v;
+				  }
+			  });
 
 	public static readonly DirectProperty<DataBox, ISelectionModel> SelectionProperty =
 		DataBoxRowsPresenter.SelectionProperty.AddOwner<DataBox>(
@@ -45,18 +42,18 @@ public class DataBox : TemplatedControl
 		  (o, v) => {
 			  if(v != null) {
 				  v.Source = o.Items;
-			     o.Selection = v;
+				  o.Selection = v;
 			  }
 		  },
 		  defaultBindingMode: BindingMode.TwoWay);
-		
-	public static readonly DirectProperty<DataBox, AvaloniaList<DataBoxColumn>> ColumnsProperty =
-        AvaloniaProperty.RegisterDirect<DataBox, AvaloniaList<DataBoxColumn>>(
-            nameof(Columns), 
-            o => o.Columns);
 
-	public static readonly StyledProperty<SortMode> SortModeProperty = 
-        AvaloniaProperty.Register<DataBox, SortMode>(nameof(SortMode), SortMode.None);
+	public static readonly DirectProperty<DataBox, AvaloniaList<DataBoxColumn>> ColumnsProperty =
+		  AvaloniaProperty.RegisterDirect<DataBox, AvaloniaList<DataBoxColumn>>(
+				nameof(Columns),
+				o => o.Columns);
+
+	public static readonly StyledProperty<SortMode> SortModeProperty =
+		  AvaloniaProperty.Register<DataBox, SortMode>(nameof(SortMode), SortMode.None);
 
 	public static readonly StyledProperty<ICommand?> SortCommandProperty =
 		 AvaloniaProperty.Register<DataBoxColumn, ICommand?>(nameof(SortCommand));
@@ -67,47 +64,47 @@ public class DataBox : TemplatedControl
 	public static readonly StyledProperty<List<int>> ColumnWidthsProperty =
 		 AvaloniaProperty.Register<DataBoxColumn, List<int>>(nameof(ColumnWidths));
 
-	public static readonly StyledProperty<bool> CanUserResizeColumnsProperty = 
-        AvaloniaProperty.Register<DataBox, bool>(nameof(CanUserResizeColumns));
+	public static readonly StyledProperty<bool> CanUserResizeColumnsProperty =
+		  AvaloniaProperty.Register<DataBox, bool>(nameof(CanUserResizeColumns));
 
 	public static readonly StyledProperty<bool> DisableSearchProperty =
 		  AvaloniaProperty.Register<DataBox, bool>(nameof(DisableSearch));
 
-	public static readonly StyledProperty<DataBoxGridLinesVisibility> GridLinesVisibilityProperty = 
-        AvaloniaProperty.Register<DataBox, DataBoxGridLinesVisibility>(nameof(GridLinesVisibility));
+	public static readonly StyledProperty<DataBoxGridLinesVisibility> GridLinesVisibilityProperty =
+		  AvaloniaProperty.Register<DataBox, DataBoxGridLinesVisibility>(nameof(GridLinesVisibility));
 
 	public static readonly StyledProperty<SelectionMode> SelectionModeProperty =
 	 AvaloniaProperty.Register<DataBox, SelectionMode>(nameof(SelectionMode));
 
-	public static readonly StyledProperty<bool> IsReadOnlyProperty = 
-        AvaloniaProperty.Register<DataBox, bool>(nameof(IsReadOnly));
+	public static readonly StyledProperty<bool> IsReadOnlyProperty =
+		  AvaloniaProperty.Register<DataBox, bool>(nameof(IsReadOnly));
 
-    public static readonly StyledProperty<IBrush> HorizontalGridLinesBrushProperty =
-        AvaloniaProperty.Register<DataBox, IBrush>(nameof(HorizontalGridLinesBrush));
-        
-    public static readonly StyledProperty<IBrush> VerticalGridLinesBrushProperty =
-        AvaloniaProperty.Register<DataBox, IBrush>(nameof(VerticalGridLinesBrush));
+	public static readonly StyledProperty<IBrush> HorizontalGridLinesBrushProperty =
+		 AvaloniaProperty.Register<DataBox, IBrush>(nameof(HorizontalGridLinesBrush));
+
+	public static readonly StyledProperty<IBrush> VerticalGridLinesBrushProperty =
+		 AvaloniaProperty.Register<DataBox, IBrush>(nameof(VerticalGridLinesBrush));
 
 	private IEnumerable? _items = Array.Empty<object?>();
 	private ISelectionModel _selection = new SelectionModel<object?>();
 
 	private AvaloniaList<DataBoxColumn> _columns;
-    private ScrollViewer? _headersPresenterScrollViewer;
-    private DataBoxColumnHeadersPresenter? _headersPresenter;
-    private DataBoxRowsPresenter? _rowsPresenter;
+	private ScrollViewer? _headersPresenterScrollViewer;
+	private DataBoxColumnHeadersPresenter? _headersPresenter;
+	private DataBoxRowsPresenter? _rowsPresenter;
 
-    public AvaloniaList<DataBoxColumn> Columns
-    {
-        get => _columns;
-        private set => SetAndRaise(ColumnsProperty, ref _columns, value);
-    }
+	public AvaloniaList<DataBoxColumn> Columns
+	{
+		get => _columns;
+		private set => SetAndRaise(ColumnsProperty, ref _columns, value);
+	}
 
-    [Content]
-    public IEnumerable? Items
-    {
-        get { return _items; }
-        set { SetAndRaise(ItemsProperty, ref _items, value); }
-    }
+	[Content]
+	public IEnumerable? Items
+	{
+		get { return _items; }
+		set { SetAndRaise(ItemsProperty, ref _items, value); }
+	}
 
 	public ISelectionModel Selection
 	{
@@ -120,7 +117,7 @@ public class DataBox : TemplatedControl
 		get => GetValue(SelectionModeProperty);
 		set => SetValue(SelectionModeProperty, value);
 	}
-	
+
 	public SortMode SortMode
 	{
 		get => GetValue(SortModeProperty);
@@ -152,34 +149,34 @@ public class DataBox : TemplatedControl
 	}
 
 	public bool CanUserResizeColumns
-    {
-        get => GetValue(CanUserResizeColumnsProperty);
-        set => SetValue(CanUserResizeColumnsProperty, value);
-    }
+	{
+		get => GetValue(CanUserResizeColumnsProperty);
+		set => SetValue(CanUserResizeColumnsProperty, value);
+	}
 
-    public DataBoxGridLinesVisibility GridLinesVisibility
-    {
-        get => GetValue(GridLinesVisibilityProperty);
-        set => SetValue(GridLinesVisibilityProperty, value);
-    }
+	public DataBoxGridLinesVisibility GridLinesVisibility
+	{
+		get => GetValue(GridLinesVisibilityProperty);
+		set => SetValue(GridLinesVisibilityProperty, value);
+	}
 
 	public bool IsReadOnly
-    {
-        get => GetValue(IsReadOnlyProperty);
-        set => SetValue(IsReadOnlyProperty, value);
-    }
+	{
+		get => GetValue(IsReadOnlyProperty);
+		set => SetValue(IsReadOnlyProperty, value);
+	}
 
-    public IBrush HorizontalGridLinesBrush
-    {
-        get => GetValue(HorizontalGridLinesBrushProperty);
-        set => SetValue(HorizontalGridLinesBrushProperty, value);
-    }
+	public IBrush HorizontalGridLinesBrush
+	{
+		get => GetValue(HorizontalGridLinesBrushProperty);
+		set => SetValue(HorizontalGridLinesBrushProperty, value);
+	}
 
-    public IBrush VerticalGridLinesBrush
-    {
-        get => GetValue(VerticalGridLinesBrushProperty);
-        set => SetValue(VerticalGridLinesBrushProperty, value);
-    }
+	public IBrush VerticalGridLinesBrush
+	{
+		get => GetValue(VerticalGridLinesBrushProperty);
+		set => SetValue(VerticalGridLinesBrushProperty, value);
+	}
 
 	public delegate void CellClickHandler(DataBoxCell cell);
 	public event CellClickHandler? CellClick;
@@ -188,80 +185,74 @@ public class DataBox : TemplatedControl
 	public event CellDoubleClickHandler? CellDoubleClick;
 
 	internal double AccumulatedWidth { get; set; }
-        
-    internal double AvailableWidth { get; set; }
 
-    internal double AvailableHeight { get; set; }
+	internal double AvailableWidth { get; set; }
+
+	internal double AvailableHeight { get; set; }
 
 	public DataBox()
-    {
-        _columns = new AvaloniaList<DataBoxColumn>();
-        SortState = new();
-        ColumnWidths = new();
+	{
+		_columns = new AvaloniaList<DataBoxColumn>();
+		SortState = new();
+		ColumnWidths = new();
 
-        this.AddHandler(InputElement.KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel, true);
-    }
+		this.AddHandler(InputElement.KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel, true);
+	}
 
-    protected override void OnApplyTemplate(TemplateAppliedEventArgs e)
-    {
-        base.OnApplyTemplate(e);
+	protected override void OnApplyTemplate(TemplateAppliedEventArgs e)
+	{
+		base.OnApplyTemplate(e);
 
-        _headersPresenterScrollViewer = e.NameScope.Find<ScrollViewer>("PART_HeadersPresenterScrollViewer");
-        _headersPresenter = e.NameScope.Find<DataBoxColumnHeadersPresenter>("PART_HeadersPresenter");
-        _rowsPresenter = e.NameScope.Get<DataBoxRowsPresenter>("PART_RowsPresenter");
-        _rowsPresenter.AutoScrollToSelectedItem = true;
-        if(_columns.Count > ColumnWidths.Count) {
-            for(int i = ColumnWidths.Count; i < _columns.Count; i++) {
-                ColumnWidths.Add(_columns[i].InitialWidth);
-            }
-        }
-		  Attach();
-    }
+		_headersPresenterScrollViewer = e.NameScope.Find<ScrollViewer>("PART_HeadersPresenterScrollViewer");
+		_headersPresenter = e.NameScope.Find<DataBoxColumnHeadersPresenter>("PART_HeadersPresenter");
+		_rowsPresenter = e.NameScope.Get<DataBoxRowsPresenter>("PART_RowsPresenter");
+		_rowsPresenter.AutoScrollToSelectedItem = true;
+		if(_columns.Count > ColumnWidths.Count) {
+			for(int i = ColumnWidths.Count; i < _columns.Count; i++) {
+				ColumnWidths.Add(_columns[i].InitialWidth);
+			}
+		}
+		Attach();
+	}
 
 	protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
 	{
 		if(change.Property == ColumnsProperty) {
 			if(change.NewValue is AvaloniaList<DataBoxColumn> columns && columns.Count > ColumnWidths.Count) {
-				 for(int i = ColumnWidths.Count; i < columns.Count; i++) {
-                ColumnWidths.Add(columns[i].InitialWidth);
-            }
+				for(int i = ColumnWidths.Count; i < columns.Count; i++) {
+					ColumnWidths.Add(columns[i].InitialWidth);
+				}
 			}
 		}
 		base.OnPropertyChanged(change);
 	}
 
 	internal void Attach()
-    {
-        if (_headersPresenter is { })
-        {
-            _headersPresenter.DataBox = this;
-            _headersPresenter.Detach();
-            _headersPresenter.Attach();
-        }
+	{
+		if(_headersPresenter is { }) {
+			_headersPresenter.DataBox = this;
+			_headersPresenter.Detach();
+			_headersPresenter.Attach();
+		}
 
-        if (_rowsPresenter is { })
-        {
-            _rowsPresenter.DataBox = this;
+		if(_rowsPresenter is { }) {
+			_rowsPresenter.DataBox = this;
 
-            _rowsPresenter[!!ItemsControl.ItemsSourceProperty] = this[!!ItemsProperty];
-            _rowsPresenter[!!ListBox.SelectionProperty] = this[!!SelectionProperty];
+			_rowsPresenter[!!ItemsControl.ItemsSourceProperty] = this[!!ItemsProperty];
+			_rowsPresenter[!!ListBox.SelectionProperty] = this[!!SelectionProperty];
 
-            _rowsPresenter.TemplateApplied += (_, _) =>
-            {
-                if (_rowsPresenter.Scroll is ScrollViewer scrollViewer)
-                {
-                    scrollViewer.ScrollChanged += (_, _) =>
-                    {
-                        var (x, _) = scrollViewer.Offset;
-                        if (_headersPresenterScrollViewer is { })
-                        {
-                            _headersPresenterScrollViewer.Offset = new Vector(x, 0);
-                        }
-                    };
-                }
-            };
-        }
-    }
+			_rowsPresenter.TemplateApplied += (_, _) => {
+				if(_rowsPresenter.Scroll is ScrollViewer scrollViewer) {
+					scrollViewer.ScrollChanged += (_, _) => {
+						var (x, _) = scrollViewer.Offset;
+						if(_headersPresenterScrollViewer is { }) {
+							_headersPresenterScrollViewer.Offset = new Vector(x, 0);
+						}
+					};
+				}
+			};
+		}
+	}
 
 	internal void OnCellDoubleTapped(object? sender, RoutedEventArgs e)
 	{
@@ -276,7 +267,7 @@ public class DataBox : TemplatedControl
 	internal void OnCellPointerPressed(object? sender, RoutedEventArgs e)
 	{
 		if(sender is DataBoxCell cell) {
-			if(cell.Column is DataBoxCheckBoxColumn && Selection.SelectedItems.IndexOf(cell.DataContext) >= 0) {
+			if(cell.Column is DataBoxCheckBoxColumn && Selection.SelectedItems.Contains(cell.DataContext)) {
 				//Prevent selection change when clicking checkbox column when multiple items are selected
 				e.Handled = true;
 			}
@@ -362,10 +353,10 @@ public class DataBox : TemplatedControl
 			return false;
 		}
 
-		if(column is DataBoxTextColumn textColumn && textColumn.Binding is CompiledBindingExtension columnBinding) {
-#pragma warning disable IL2026 // Members annotated with 'RequiresUnreferencedCodeAttribute' require dynamic access otherwise can break functionality when trimming application code
-			Binding binding = new Binding(columnBinding.Path.ToString(), BindingMode.OneTime);
-#pragma warning restore IL2026 // Members annotated with 'RequiresUnreferencedCodeAttribute' require dynamic access otherwise can break functionality when trimming application code
+		if(column is DataBoxTextColumn textColumn && textColumn.Binding is CompiledBinding columnBinding) {
+#pragma warning disable IL2026, IL3050 // Members annotated with 'RequiresUnreferencedCodeAttribute' require dynamic access otherwise can break functionality when trimming application code
+			Binding binding = new Binding(columnBinding.Path?.ToString() ?? "");
+#pragma warning restore IL2026, IL3050 // Members annotated with 'RequiresUnreferencedCodeAttribute' require dynamic access otherwise can break functionality when trimming application code
 			int i = 0;
 			foreach(object item in Items) {
 				binding.Source = item;
@@ -397,10 +388,10 @@ public class DataBox : TemplatedControl
 		List<Binding?> bindings = new();
 		for(int i = 0; i < Columns.Count; i++) {
 			DataBoxColumn column = Columns[i];
-			if(column is DataBoxTextColumn textColumn && textColumn.Binding is CompiledBindingExtension columnBinding) {
-#pragma warning disable IL2026 // Members annotated with 'RequiresUnreferencedCodeAttribute' require dynamic access otherwise can break functionality when trimming application code
-				bindings.Add(new Binding(columnBinding.Path.ToString(), BindingMode.OneTime));
-#pragma warning restore IL2026 // Members annotated with 'RequiresUnreferencedCodeAttribute' require dynamic access otherwise can break functionality when trimming application code
+			if(column is DataBoxTextColumn textColumn && textColumn.Binding is CompiledBinding columnBinding) {
+#pragma warning disable IL2026, IL3050 // Members annotated with 'RequiresUnreferencedCodeAttribute' require dynamic access otherwise can break functionality when trimming application code
+				bindings.Add(new Binding(columnBinding.Path?.ToString() ?? ""));
+#pragma warning restore IL2026, IL3050 // Members annotated with 'RequiresUnreferencedCodeAttribute' require dynamic access otherwise can break functionality when trimming application code
 
 				sb.Append(textColumn.Header);
 				if(i < Columns.Count - 1) {
@@ -415,7 +406,7 @@ public class DataBox : TemplatedControl
 		foreach(object item in Items) {
 			for(int i = 0; i < Columns.Count; i++) {
 				DataBoxColumn column = Columns[i];
-				if(column is DataBoxTextColumn textColumn && textColumn.Binding is CompiledBindingExtension columnBinding) {
+				if(column is DataBoxTextColumn textColumn && textColumn.Binding is CompiledBinding columnBinding) {
 					Binding? binding = bindings[i];
 					if(binding == null) {
 						continue;
@@ -540,7 +531,7 @@ public class SortState
 			return "";
 		}
 		int i = SortOrder.FindIndex(x => x.Item1 == column);
-		return i >= 0 ? (i+1).ToString() : "";
+		return i >= 0 ? (i + 1).ToString() : "";
 	}
 }
 

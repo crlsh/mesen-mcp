@@ -35,6 +35,7 @@ void SnesCpu::Reset()
 	_state.PrevIrqSource = (uint8_t)SnesIrqSource::None;
 }
 
+// clang-format off
 void SnesCpu::RunOp()
 {
 	switch(GetOpCode()) {
@@ -296,6 +297,7 @@ void SnesCpu::RunOp()
 		case 0xFF: AddrMode_AbsLngIdxX(); SBC(); break;
 	}
 }
+// clang-format on
 
 SnesCpuState& SnesCpu::GetState()
 {
@@ -314,8 +316,8 @@ void SnesCpu::SetNmiFlag(uint8_t delay)
 
 void SnesCpu::DetectNmiSignalEdge()
 {
-	//"This edge detector polls the status of the NMI line during φ2 of each CPU cycle (i.e., during the 
-	//second half of each cycle) and raises an internal signal if the input goes from being high during 
+	//"This edge detector polls the status of the NMI line during φ2 of each CPU cycle (i.e., during the
+	//second half of each cycle) and raises an internal signal if the input goes from being high during
 	//one cycle to being low during the next"
 	if(_state.NmiFlagCounter) {
 		_state.NmiFlagCounter--;
@@ -332,7 +334,7 @@ void SnesCpu::DetectNmiSignalEdge()
 			}
 		}
 	}
-	
+
 	if(!_state.IrqLock) {
 		_state.PrevIrqSource = _state.IrqSource != 0 && !CheckFlag(ProcFlags::IrqDisable);
 		if(_state.IrqSource != 0) {
@@ -385,7 +387,7 @@ uint8_t SnesCpu::GetOpCode()
 
 void SnesCpu::IdleOrRead()
 {
-	if(!_state.IrqLock && ((_state.IrqSource != 0 || _state.PrevIrqSource != 0) && !CheckFlag(ProcFlags::IrqDisable)) || (_state.NmiFlagCounter == 1 || _state.NeedNmi)) {
+	if(!_state.IrqLock && (((_state.IrqSource != 0 || _state.PrevIrqSource != 0) && !CheckFlag(ProcFlags::IrqDisable)) || _state.NmiFlagCounter == 1 || _state.NeedNmi)) {
 		//If an IRQ or NMI will be triggered on the next instruction/cycle, the 6-clock idle cycle turns into a dummy read at the current PC
 		ReadCode(_state.PC);
 	} else {
@@ -623,9 +625,24 @@ bool SnesCpu::CheckFlag(uint8_t flag)
 	return (_state.PS & flag) == flag;
 }
 
-void SnesCpu::Serialize(Serializer &s)
+void SnesCpu::Serialize(Serializer& s)
 {
-	SV(_state.A); SV(_state.CycleCount); SV(_state.D); SV(_state.DBR); SV(_state.EmulationMode); SV(_state.IrqSource); SV(_state.K);
-	SV(_state.NmiFlagCounter); SV(_state.PC); SV(_state.PrevIrqSource); SV(_state.PS); SV(_state.SP); SV(_state.StopState);
-	SV(_state.X); SV(_state.Y); SV(_state.IrqLock); SV(_state.NeedNmi); SV(_waiOver);
+	SV(_state.A);
+	SV(_state.CycleCount);
+	SV(_state.D);
+	SV(_state.DBR);
+	SV(_state.EmulationMode);
+	SV(_state.IrqSource);
+	SV(_state.K);
+	SV(_state.NmiFlagCounter);
+	SV(_state.PC);
+	SV(_state.PrevIrqSource);
+	SV(_state.PS);
+	SV(_state.SP);
+	SV(_state.StopState);
+	SV(_state.X);
+	SV(_state.Y);
+	SV(_state.IrqLock);
+	SV(_state.NeedNmi);
+	SV(_waiOver);
 }

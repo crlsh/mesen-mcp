@@ -17,13 +17,10 @@ namespace Mesen.Windows
 
 		public SelectStorageFolderWindow()
 		{
-			_model = new SelectStorageFolderViewModel() { StoreInUserProfile = ConfigManager.HomeFolder == ConfigManager.DefaultDocumentsFolder };
+			_model = new SelectStorageFolderViewModel() { StoreInUserProfile = ConfigManager.HomeFolder != ConfigManager.DefaultPortableFolder };
 			DataContext = _model;
 
 			InitializeComponent();
-#if DEBUG
-			this.AttachDevTools();
-#endif
 		}
 
 		private void InitializeComponent()

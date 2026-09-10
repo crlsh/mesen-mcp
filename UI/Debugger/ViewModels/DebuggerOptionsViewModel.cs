@@ -4,7 +4,7 @@ using Mesen.ViewModels;
 
 namespace Mesen.Debugger.ViewModels
 {
-	public class DebuggerOptionsViewModel : ViewModelBase
+	public partial class DebuggerOptionsViewModel : ViewModelBase
 	{
 		public DebuggerConfig Config { get; }
 
@@ -16,7 +16,7 @@ namespace Mesen.Debugger.ViewModels
 		public bool IsSms { get; }
 		public bool IsGba { get; }
 		public bool IsWs { get; }
-		
+
 		public bool HasSpecificBreakOptions { get; }
 
 		public DebuggerOptionsViewModel() : this(new DebuggerConfig(), CpuType.Snes) { }

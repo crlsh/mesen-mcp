@@ -1,23 +1,24 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Markup.Xaml;
-using System;
-using Mesen.Debugger.ViewModels;
-using Mesen.Interop;
-using Avalonia.Interactivity;
-using System.ComponentModel;
-using Avalonia.Threading;
-using Mesen.Config;
-using System.Runtime.InteropServices;
-using Mesen.Debugger.Utilities;
-using Mesen.Utilities;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using Avalonia.VisualTree;
 using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
+using Mesen.Config;
+using Mesen.Debugger.Utilities;
+using Mesen.Debugger.ViewModels;
 using Mesen.Debugger.Views;
-using System.Linq;
+using Mesen.Interop;
+using Mesen.Utilities;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 
 namespace Mesen.Debugger.Windows
 {
@@ -29,6 +30,7 @@ namespace Mesen.Debugger.Windows
 		private int? _scrollToAddress = null;
 		private bool _suppressBringToFront = false;
 		private bool _autoResumePending = false;
+		private Stopwatch _cpuUsageTimer = new();
 
 		[Obsolete("For designer only")]
 		public DebuggerWindow() : this(null, null) { }
@@ -36,20 +38,18 @@ namespace Mesen.Debugger.Windows
 		public DebuggerWindow(CpuType? cpuType, int? scrollToAddress = null)
 		{
 			InitializeComponent();
-#if DEBUG
-			this.AttachDevTools();
-#endif
 
 			_model = new DebuggerWindowViewModel(cpuType);
 			_scrollToAddress = scrollToAddress;
 			DataContext = _model;
+			_cpuUsageTimer.Start();
 
 			_model.InitializeMenu(this);
 
 			if(Design.IsDesignMode) {
 				return;
 			}
-			
+
 			AddHandler(DragDrop.DropEvent, OnDrop);
 
 			_model.Config.LoadWindowSettings(this);
@@ -214,6 +214,13 @@ namespace Mesen.Debugger.Windows
 							}
 						});
 					}
+
+					if(_cpuUsageTimer.ElapsedMilliseconds > 100) {
+						_cpuUsageTimer.Restart();
+						Dispatcher.UIThread.Post(() => {
+							_model.UpdateCpuUsage();
+						});
+					}
 					break;
 
 				case ConsoleNotificationType.StateLoaded:
@@ -232,7 +239,7 @@ namespace Mesen.Debugger.Windows
 
 		private void OnDrop(object? sender, DragEventArgs e)
 		{
-			string? filename = e.Data.GetFiles()?.FirstOrDefault()?.Path.LocalPath;
+			string? filename = e.DataTransfer.TryGetFiles()?.FirstOrDefault()?.Path.LocalPath;
 			if(filename != null && File.Exists(filename)) {
 				Activate();
 				DebugWorkspaceManager.LoadSupportedFile(filename, true);

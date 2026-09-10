@@ -26,8 +26,15 @@ protected:
 	bool _strobe = false;
 	ControllerType _type = ControllerType::None;
 	uint8_t _port = 0;
+
+	uint8_t _prevReadValue = 0;
+	uint64_t _prevReadCycle = 0;
+
 	bool _connected = true;
 	SimpleLock _stateLock;
+
+	// STRUCTURAL: CE moved RefreshStateBuffer to protected section; keep CE layout
+	virtual void RefreshStateBuffer() {}
 
 	void EnsureCapacity(int32_t minBitCount);
 	uint32_t GetByteIndex(uint8_t bit);
@@ -49,6 +56,8 @@ protected:
 
 	virtual void InternalSetStateFromInput();
 
+	bool IsTurboOn(uint8_t turboSpeed);
+
 public:
 	static constexpr int DeviceXCoordButtonId = 0xFFFE;
 	static constexpr int DeviceYCoordButtonId = 0xFFFF;
@@ -61,7 +70,7 @@ public:
 
 	BaseControlDevice(Emulator* emu, ControllerType type, uint8_t port, KeyMappingSet keyMappingSet = KeyMappingSet());
 	virtual ~BaseControlDevice();
-	
+
 	virtual void Init() {}
 
 	uint8_t GetPort();
@@ -81,13 +90,13 @@ public:
 	void ClearBit(uint8_t bit);
 	void InvertBit(uint8_t bit);
 	void SetBitValue(uint8_t bit, bool set);
-	
+
 	virtual void SetTextState(string state);
 	virtual string GetTextState();
 
 	void SetStateFromInput();
-	virtual void OnAfterSetState() { }
-	
+	virtual void OnAfterSetState() {}
+
 	virtual void SetRawState(ControlDeviceState state);
 	virtual ControlDeviceState GetRawState();
 
@@ -97,14 +106,17 @@ public:
 	virtual uint8_t ReadRam(uint16_t addr) = 0;
 	virtual void WriteRam(uint16_t addr, uint8_t value) = 0;
 
-	virtual void RefreshStateBuffer() { }
+	// STRUCTURAL: CE replaces duplicate public RefreshStateBuffer (now protected above) with new read-tracking API — SRP
+	void SetPreviousRead(uint64_t cycle, uint8_t value);
+	uint8_t GetPreviousReadValue();
+	uint64_t GetPreviousReadCycle();
 
 	//Used by Lua API
 	virtual vector<DeviceButtonName> GetKeyNameAssociations() { return {}; }
 
 	virtual bool HasControllerType(ControllerType type);
-	
+
 	void static SwapButtons(shared_ptr<BaseControlDevice> state1, uint8_t button1, shared_ptr<BaseControlDevice> state2, uint8_t button2);
 
-	void Serialize(Serializer &s) override;
+	void Serialize(Serializer& s) override;
 };

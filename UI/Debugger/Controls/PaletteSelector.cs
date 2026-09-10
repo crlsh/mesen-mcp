@@ -14,6 +14,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -110,18 +111,18 @@ namespace Mesen.Debugger.Controls
 		{
 			AffectsRender<PaletteSelector>(IsEnabledProperty, SelectionModeProperty, SelectedPaletteProperty, PaletteColorsProperty, ColumnCountProperty, ShowIndexesProperty, PaletteIndexValuesProperty);
 			AffectsMeasure<PaletteSelector>(ColumnCountProperty, BlockSizeProperty, PaletteColorsProperty);
+
+			SelectionModeProperty.Changed.AddClassHandler<PaletteSelector>((x, e) => {
+				x.CoerceValue(SelectedPaletteProperty);
+			});
+
+			PaletteColorsProperty.Changed.AddClassHandler<PaletteSelector>((x, e) => {
+				x.CoerceValue(SelectedPaletteProperty);
+			});
 		}
 
 		public PaletteSelector()
 		{
-			this.GetObservable(SelectionModeProperty).Subscribe((mode) => {
-				this.CoerceValue(SelectedPaletteProperty);
-			});
-
-			this.GetObservable(PaletteColorsProperty).Subscribe((mode) => {
-				this.CoerceValue(SelectedPaletteProperty);
-			});
-
 			Focusable = true;
 			ClipToBounds = true;
 		}
@@ -130,11 +131,11 @@ namespace Mesen.Debugger.Controls
 		{
 			base.OnAttachedToVisualTree(e);
 			_timer.Interval = TimeSpan.FromMilliseconds(100);
-			_timer.Tick += timer_Tick;
+			_timer.Tick += Timer_Tick;
 			_timer.Start();
 		}
 
-		private void timer_Tick(object? sender, EventArgs e)
+		private void Timer_Tick(object? sender, EventArgs e)
 		{
 			if(SelectionMode != PaletteSelectionMode.None) {
 				InvalidateVisual();
@@ -152,7 +153,7 @@ namespace Mesen.Debugger.Controls
 			if(PaletteColors != null && ColumnCount > 0) {
 				return new Size(ColumnCount * BlockSize, (PaletteColors.Length / ColumnCount) * BlockSize);
 			} else {
-				return new Size(0,0);
+				return new Size(0, 0);
 			}
 		}
 
@@ -212,7 +213,7 @@ namespace Mesen.Debugger.Controls
 		public override void Render(DrawingContext context)
 		{
 			UInt32[] paletteColors = PaletteColors;
-			
+
 			if(paletteColors == null || ColumnCount == 0) {
 				return;
 			}
@@ -303,7 +304,7 @@ namespace Mesen.Debugger.Controls
 		protected override void OnPointerMoved(PointerEventArgs e)
 		{
 			base.OnPointerMoved(e);
-			
+
 			if(RawPalette == null) {
 				return;
 			}

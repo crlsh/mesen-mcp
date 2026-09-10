@@ -1,15 +1,15 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using System.IO;
-using System.Text.RegularExpressions;
-using System.Reflection;
+﻿using Avalonia.Controls;
 using Mesen.Interop;
-using System.Diagnostics;
 using Mesen.Utilities;
-using Avalonia.Controls;
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 
 namespace Mesen.Config
 {
@@ -20,12 +20,23 @@ namespace Mesen.Config
 		private static object _initLock = new object();
 
 		public static string DefaultPortableFolder { get { return Path.GetDirectoryName(Program.ExePath) ?? "./"; } }
-		public static string DefaultDocumentsFolder
+		public static string DefaultDocumentsFolder => Path.Combine(BaseDocumentsFolder, "MesenCE");
+
+		private static string BaseDocumentsFolder
 		{
 			get
 			{
 				Environment.SpecialFolder folder = OperatingSystem.IsWindows() ? Environment.SpecialFolder.MyDocuments : Environment.SpecialFolder.ApplicationData;
-				return Path.Combine(Environment.GetFolderPath(folder, Environment.SpecialFolderOption.Create), "Mesen2");
+				return Environment.GetFolderPath(folder, Environment.SpecialFolderOption.Create);
+			}
+		}
+
+		public static string? MesenLegacyDocumentsFolder
+		{
+			get
+			{
+				string path = Path.Combine(BaseDocumentsFolder, "Mesen2");
+				return File.Exists(Path.Combine(path, "settings.json")) ? path : null;
 			}
 		}
 
@@ -55,7 +66,7 @@ namespace Mesen.Config
 			_homeFolder = homeFolder;
 			Config.Save();
 		}
-		
+
 		public static void LoadConfig()
 		{
 			if(_config == null) {
@@ -148,7 +159,9 @@ namespace Mesen.Config
 				object? cfg = ConfigManager.Config;
 				PropertyInfo? property;
 				for(int i = 0; i < switchPath.Length; i++) {
+#pragma warning disable IL2075 // 'this' argument does not satisfy 'DynamicallyAccessedMembersAttribute' in call to target method. The return value of the source method does not have matching annotations.
 					property = cfg.GetType().GetProperty(switchPath[i], BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+#pragma warning restore IL2075 // 'this' argument does not satisfy 'DynamicallyAccessedMembersAttribute' in call to target method. The return value of the source method does not have matching annotations.
 					if(property == null) {
 						//Invalid switch name
 						return false;
@@ -174,18 +187,23 @@ namespace Mesen.Config
 			_homeFolder = null;
 		}
 
-		public static string HomeFolder {
+		public static string HomeFolder
+		{
 			get
 			{
 				if(_homeFolder == null) {
 					string portableFolder = DefaultPortableFolder;
-					string documentsFolder = DefaultDocumentsFolder;
 
 					string portableConfig = Path.Combine(portableFolder, "settings.json");
 					if(File.Exists(portableConfig)) {
 						_homeFolder = portableFolder;
 					} else {
-						_homeFolder = documentsFolder;
+						string documentsFolder = DefaultDocumentsFolder;
+						if(MesenLegacyDocumentsFolder == null || File.Exists(Path.Combine(documentsFolder, "settings.json"))) {
+							_homeFolder = documentsFolder;
+						} else {
+							_homeFolder = MesenLegacyDocumentsFolder;
+						}
 					}
 
 					Directory.CreateDirectory(_homeFolder);
@@ -233,6 +251,7 @@ namespace Mesen.Config
 		public static string TestFolder { get { return GetFolder(Path.Combine(ConfigManager.HomeFolder, "Tests"), null, false); } }
 		public static string HdPackFolder { get { return GetFolder(Path.Combine(ConfigManager.HomeFolder, "HdPacks"), null, false); } }
 		public static string RecentGamesFolder { get { return GetFolder(Path.Combine(ConfigManager.HomeFolder, "RecentGames"), null, false); } }
+		public static string DumpsFolder { get { return GetFolder(Path.Combine(ConfigManager.HomeFolder, "Dumps"), null, false); } }
 
 		public static string ConfigFile
 		{
@@ -248,7 +267,7 @@ namespace Mesen.Config
 
 		public static Configuration Config
 		{
-			get 
+			get
 			{
 				LoadConfig();
 				return _config!;

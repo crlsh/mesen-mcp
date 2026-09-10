@@ -7,6 +7,8 @@ class Emulator;
 class Gameboy;
 class GbMemoryManager;
 class GbDmaController;
+class EmuSettings;
+struct RenderedFrame;
 
 class GbPpu : public ISerializable
 {
@@ -18,7 +20,7 @@ private:
 	GbDmaController* _dmaController = nullptr;
 	uint16_t* _outputBuffers[2] = {};
 	uint16_t* _currentBuffer = nullptr;
-
+	EmuSettings* _settings = nullptr;
 	uint16_t* _eventViewerBuffers[2] = {};
 	uint16_t* _currentEventViewerBuffer = nullptr;
 	EvtColor _evtColor = EvtColor::HBlank;
@@ -45,11 +47,11 @@ private:
 
 	int16_t _fetchSprite = -1;
 	uint8_t _spriteCount = 0;
-	uint8_t _spriteX[10] = {};
-	uint8_t _spriteY[10] = {};
-	uint8_t _spriteIndexes[10] = {};
+	uint8_t _spriteX[40] = {};
+	uint8_t _spriteY[40] = {};
+	uint8_t _spriteIndexes[40] = {};
 	uint8_t _oamReadBuffer[2] = {};
-	
+
 	bool _lcdDisabled = true;
 	bool _stopOamBlocked = false;
 	bool _stopVramBlocked = false;
@@ -70,6 +72,10 @@ private:
 	GbPixelType _lastPixelType = {};
 	uint8_t _lastBgColor = 0;
 
+	uint16_t _overclockScanlineCount = 0;
+	uint16_t _vblankStartScanline = 144;
+	uint16_t _lastScanline = 153;
+
 	__forceinline void WriteBgPixel(uint8_t colorIndex);
 	__forceinline void WriteObjPixel(uint8_t colorIndex);
 
@@ -79,8 +85,10 @@ private:
 	__forceinline void ProcessVblankScanline();
 	void ProcessFirstScanlineAfterPowerOn();
 	__forceinline void ProcessVisibleScanline();
+	void ProcessOverclockScanline();
 	__forceinline void RunDrawCycle();
 	__forceinline void RunSpriteEvaluation();
+	void LoadExtraSprite();
 	void ResetRenderer();
 	void ClockSpriteFetcher();
 	void FindNextSprite();
@@ -96,6 +104,7 @@ private:
 	__forceinline uint16_t LcdReadObjPalette(uint8_t addr);
 
 	void SendFrame();
+	void SendLinkedFrame(RenderedFrame& frame);
 	void UpdatePalette();
 
 	void SetMode(PpuMode mode);
@@ -119,6 +128,8 @@ public:
 	uint32_t GetFrameCount();
 	uint8_t GetScanline();
 	uint16_t GetCycle();
+	uint32_t GetScanlineCount() { return _lastScanline + 1; }
+
 	bool IsLcdEnabled();
 	bool IsCgbEnabled();
 	PpuMode GetMode();

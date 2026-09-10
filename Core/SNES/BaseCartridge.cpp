@@ -25,7 +25,6 @@
 #include "Shared/BatteryManager.h"
 #include "Shared/MessageManager.h"
 #include "Shared/Emulator.h"
-#include "Shared/RomInfo.h"
 #include "Utilities/HexUtilities.h"
 #include "Utilities/VirtualFile.h"
 #include "Utilities/FolderUtilities.h"
@@ -41,7 +40,7 @@ BaseCartridge::~BaseCartridge()
 	delete[] _saveRam;
 }
 
-unique_ptr<BaseCartridge> BaseCartridge::CreateCartridge(SnesConsole* console, VirtualFile &romFile)
+unique_ptr<BaseCartridge> BaseCartridge::CreateCartridge(SnesConsole* console, VirtualFile& romFile)
 {
 	if(romFile.IsValid()) {
 		unique_ptr<BaseCartridge> cart(new BaseCartridge());
@@ -131,12 +130,12 @@ int32_t BaseCartridge::GetHeaderScore(uint32_t addr)
 
 	SnesCartInformation cartInfo;
 	memcpy(&cartInfo, _prgRom + addr + 0x7FB0, sizeof(SnesCartInformation));
-	
+
 	uint32_t score = 0;
 	uint8_t mode = (cartInfo.MapMode & ~0x10);
-	if((mode == 0x20 || mode == 0x22) && addr < 0x8000) {
+	if((mode == 0x20 || mode == 0x22) && (addr & ~0x400000) < 0x8000) {
 		score++;
-	} else if((mode == 0x21 || mode == 0x25) && addr >= 0x8000) {
+	} else if((mode == 0x21 || mode == 0x25) && (addr & ~0x400000) >= 0x8000) {
 		score++;
 	}
 
@@ -161,7 +160,7 @@ int32_t BaseCartridge::GetHeaderScore(uint32_t addr)
 	if(resetVector < 0x8000) {
 		return -1;
 	}
-	
+
 	uint8_t op = _prgRom[addr + (resetVector & 0x7FFF)];
 	if(op == 0x18 || op == 0x78 || op == 0x4C || op == 0x5C || op == 0x20 || op == 0x22 || op == 0x9C) {
 		//CLI, SEI, JMP, JML, JSR, JSl, STZ
@@ -180,7 +179,7 @@ int32_t BaseCartridge::GetHeaderScore(uint32_t addr)
 void BaseCartridge::LoadRom()
 {
 	//Find the best potential header among lorom/hirom + headerless/headered combinations
-	vector<uint32_t> baseAddresses = { 0, 0x200, 0x8000, 0x8200, 0x408000, 0x408200 };
+	vector<uint32_t> baseAddresses = { 0, 0x200, 0x8000, 0x8200, 0x400000, 0x400200, 0x408000, 0x408200 };
 	int32_t bestScore = -1;
 	bool hasHeader = false;
 	bool isLoRom = true;
@@ -206,7 +205,7 @@ void BaseCartridge::LoadRom()
 	}
 
 	if(isLoRom) {
-		flags |= CartFlags::LoRom;
+		flags |= isExRom ? CartFlags::ExLoRom : CartFlags::LoRom;
 	} else {
 		flags |= isExRom ? CartFlags::ExHiRom : CartFlags::HiRom;
 	}
@@ -217,11 +216,9 @@ void BaseCartridge::LoadRom()
 		_prgRomSize -= 512;
 		_headerOffset -= 512;
 	}
-	
+
 	if((flags & CartFlags::HiRom) && (_cartInfo.MapMode & 0x27) == 0x25) {
 		flags |= CartFlags::ExHiRom;
-	} else if((flags & CartFlags::LoRom) && (_cartInfo.MapMode & 0x27) == 0x22) {
-		flags |= CartFlags::ExLoRom;
 	}
 
 	if(_cartInfo.MapMode & 0x10) {
@@ -230,6 +227,11 @@ void BaseCartridge::LoadRom()
 	_flags = (CartFlags::CartFlags)flags;
 
 	_hasBattery = (_cartInfo.RomType & 0x0F) == 0x02 || (_cartInfo.RomType & 0x0F) == 0x05 || (_cartInfo.RomType & 0x0F) == 0x06 || (_cartInfo.RomType & 0x0F) == 0x09 || (_cartInfo.RomType & 0x0F) == 0x0A;
+
+	//Allow FX3 with battery
+	if(_cartInfo.RomType == Gsu::Fx3BatteryRomType) {
+		_hasBattery = true;
+	}
 
 	if(corruptedHeader) {
 		_coprocessorType = CoprocessorType::None;
@@ -274,7 +276,7 @@ CoprocessorType BaseCartridge::GetCoprocessorType()
 			case 0x03: return CoprocessorType::SA1;
 			case 0x04: return CoprocessorType::SDD1;
 			case 0x05: return CoprocessorType::RTC;
-			case 0x0E: 
+			case 0x0E:
 				switch(_cartInfo.RomType) {
 					case 0xE3: return CoprocessorType::SGB;
 					case 0xE5: return CoprocessorType::Satellaview;
@@ -284,16 +286,16 @@ CoprocessorType BaseCartridge::GetCoprocessorType()
 
 			case 0x0F:
 				switch(_cartInfo.CartridgeType) {
-					case 0x00: 
+					case 0x00:
 						_hasBattery = true;
 						_hasRtc = (_cartInfo.RomType & 0x0F) == 0x09;
 						return CoprocessorType::SPC7110;
 
-					case 0x01: 
+					case 0x01:
 						_hasBattery = true;
-						return GetSt01xVersion(); 
+						return GetSt01xVersion();
 
-					case 0x02: 
+					case 0x02:
 						_hasBattery = true;
 						return CoprocessorType::ST018;
 
@@ -323,7 +325,7 @@ CoprocessorType BaseCartridge::GetDspVersion()
 	string cartName = GetCartName();
 	if(cartName == "DUNGEON MASTER") {
 		return CoprocessorType::DSP2;
-	} if(cartName == "PILOTWINGS") {
+	} else if(cartName == "PILOTWINGS") {
 		return CoprocessorType::DSP1;
 	} else if(cartName == "SD\xB6\xDE\xDD\xC0\xDE\xD1GX") {
 		//SD Gundam GX
@@ -331,7 +333,7 @@ CoprocessorType BaseCartridge::GetDspVersion()
 	} else if(cartName == "PLANETS CHAMP TG3000" || cartName == "TOP GEAR 3000") {
 		return CoprocessorType::DSP4;
 	}
-	
+
 	//Default to DSP1B
 	return CoprocessorType::DSP1B;
 }
@@ -383,8 +385,8 @@ void BaseCartridge::LoadBattery()
 {
 	if(_saveRamSize > 0) {
 		_emu->GetBatteryManager()->LoadBattery(".srm", _saveRam, _saveRamSize);
-	} 
-	
+	}
+
 	if(_coprocessor && _hasBattery) {
 		_coprocessor->LoadBattery();
 	}
@@ -398,8 +400,8 @@ void BaseCartridge::SaveBattery()
 {
 	if(_saveRamSize > 0) {
 		_emu->GetBatteryManager()->SaveBattery(".srm", _saveRam, _saveRamSize);
-	} 
-	
+	}
+
 	if(_coprocessor && _hasBattery) {
 		_coprocessor->SaveBattery();
 	}
@@ -417,7 +419,7 @@ void BaseCartridge::SaveBattery()
 	}
 }
 
-void BaseCartridge::Init(MemoryMappings &mm)
+void BaseCartridge::Init(MemoryMappings& mm)
 {
 	_prgRomHandlers.clear();
 	_saveRamHandlers.clear();
@@ -427,7 +429,7 @@ void BaseCartridge::Init(MemoryMappings &mm)
 	}
 
 	uint32_t power = (uint32_t)std::log2(_prgRomSize);
-	if(_prgRomSize >(1u << power)) {
+	if(_prgRomSize > (1u << power)) {
 		//If size isn't a power of 2, mirror the part above the nearest (lower) power of 2 until the size reaches the next power of 2.
 		uint32_t halfSize = 1 << power;
 		uint32_t fullSize = 1 << (power + 1);
@@ -449,26 +451,30 @@ void BaseCartridge::Init(MemoryMappings &mm)
 	LoadBattery();
 }
 
-void BaseCartridge::RegisterHandlers(MemoryMappings &mm)
+void BaseCartridge::RegisterHandlers(MemoryMappings& mm)
 {
 	if(MapSpecificCarts(mm) || _coprocessorType == CoprocessorType::GSU || _coprocessorType == CoprocessorType::SDD1 || _coprocessorType == CoprocessorType::SPC7110 || _coprocessorType == CoprocessorType::CX4) {
 		MapBsxMemoryPack(mm);
 		return;
 	}
-	
+
 	bool mapSram = _coprocessorType != CoprocessorType::SA1;
 
-	if(_flags & CartFlags::LoRom) {
-		mm.RegisterHandler(0x00, 0x7D, 0x8000, 0xFFFF, _prgRomHandlers);
+	if(_flags & (CartFlags::LoRom | CartFlags::ExLoRom)) {
+		if(_flags & CartFlags::ExLoRom) {
+			mm.RegisterHandler(0x00, 0x7D, 0x8000, 0xFFFF, _prgRomHandlers, 0, 0x400);
+		} else {
+			mm.RegisterHandler(0x00, 0x7D, 0x8000, 0xFFFF, _prgRomHandlers);
+		}
 		mm.RegisterHandler(0x80, 0xFF, 0x8000, 0xFFFF, _prgRomHandlers);
 
 		if(mapSram && _saveRamSize > 0) {
 			if(_prgRomSize >= 1024 * 1024 * 2) {
-				//For games >= 2mb in size, put ROM at 70-7D/F0-FF:0000-7FFF (e.g: Fire Emblem: Thracia 776) 
+				//For games >= 2mb in size, put ROM at 70-7D/F0-FF:0000-7FFF (e.g: Fire Emblem: Thracia 776)
 				mm.RegisterHandler(0x70, 0x7D, 0x0000, 0x7FFF, _saveRamHandlers);
 				mm.RegisterHandler(0xF0, 0xFF, 0x0000, 0x7FFF, _saveRamHandlers);
 			} else {
-				//For games < 2mb in size, put save RAM at 70-7D/F0-FF:0000-FFFF (e.g: Wanderers from Ys) 
+				//For games < 2mb in size, put save RAM at 70-7D/F0-FF:0000-FFFF (e.g: Wanderers from Ys)
 				mm.RegisterHandler(0x70, 0x7D, 0x0000, 0xFFFF, _saveRamHandlers);
 				mm.RegisterHandler(0xF0, 0xFF, 0x0000, 0xFFFF, _saveRamHandlers);
 			}
@@ -532,7 +538,7 @@ void BaseCartridge::InitCoprocessor()
 		_sa1 = dynamic_cast<Sa1*>(_coprocessor.get());
 		_needCoprocSync = true;
 	} else if(_coprocessorType == CoprocessorType::GSU) {
-		_coprocessor.reset(new Gsu(_console, _coprocessorRamSize));
+		_coprocessor.reset(new Gsu(_console, _coprocessorRamSize, (_cartInfo.RomType == Gsu::Fx3RomType || _cartInfo.RomType == Gsu::Fx3BatteryRomType)));
 		_gsu = dynamic_cast<Gsu*>(_coprocessor.get());
 		_needCoprocSync = true;
 	} else if(_coprocessorType == CoprocessorType::SDD1) {
@@ -568,11 +574,11 @@ void BaseCartridge::InitCoprocessor()
 	}
 }
 
-bool BaseCartridge::MapSpecificCarts(MemoryMappings &mm)
+bool BaseCartridge::MapSpecificCarts(MemoryMappings& mm)
 {
 	string name = GetCartName();
 	string code = GetGameCode();
-	
+
 	if(_sufamiTurbo) {
 		_sufamiTurbo->InitializeMappings(mm, _prgRomHandlers, _saveRamHandlers);
 		return true;
@@ -691,7 +697,7 @@ bool BaseCartridge::LoadSufamiTurbo(VirtualFile& romFile)
 
 bool BaseCartridge::LoadGameboy(VirtualFile& romFile)
 {
-	_cartInfo = { };
+	_cartInfo = {};
 	_headerOffset = Gameboy::HeaderOffset;
 
 	GameboyConfig cfg = _emu->GetSettings()->GetGameboyConfig();
@@ -732,7 +738,7 @@ void BaseCartridge::SetupCpuHalt()
 	_emu->RegisterMemory(MemoryType::SnesPrgRom, _prgRom, _prgRomSize);
 }
 
-void BaseCartridge::Serialize(Serializer &s)
+void BaseCartridge::Serialize(Serializer& s)
 {
 	SVArray(_saveRam, _saveRamSize);
 	if(_coprocessor) {
@@ -821,7 +827,15 @@ void BaseCartridge::DisplayCartInfo(bool showCorruptedHeaderWarning)
 			case CoprocessorType::DSP2: coProcMessage += "DSP2"; break;
 			case CoprocessorType::DSP3: coProcMessage += "DSP3"; break;
 			case CoprocessorType::DSP4: coProcMessage += "DSP4"; break;
-			case CoprocessorType::GSU: coProcMessage += "Super FX (GSU1/2)"; break;
+
+			case CoprocessorType::GSU:
+				if(_cartInfo.RomType == Gsu::Fx3RomType || _cartInfo.RomType == Gsu::Fx3BatteryRomType) {
+					coProcMessage += "Super FX (FX3)";
+				} else {
+					coProcMessage += "Super FX (GSU1/2)";
+				}
+				break;
+
 			case CoprocessorType::OBC1: coProcMessage += "OBC1"; break;
 			case CoprocessorType::RTC: coProcMessage += "RTC"; break;
 			case CoprocessorType::SA1: coProcMessage += "SA1"; break;

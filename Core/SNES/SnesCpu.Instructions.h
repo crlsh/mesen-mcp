@@ -1,3 +1,5 @@
+#include "Shared/EventType.h"
+
 /************************
 Add/subtract operations
 *************************/
@@ -6,7 +8,9 @@ void SnesCpu::Add8(uint8_t value)
 	uint32_t result;
 	if(CheckFlag(ProcFlags::Decimal)) {
 		result = (_state.A & 0x0F) + (value & 0x0F) + (_state.PS & ProcFlags::Carry);
-		if(result > 0x09) result += 0x06;
+		if(result > 0x09) {
+			result += 0x06;
+		}
 		result = (_state.A & 0xF0) + (value & 0xF0) + (result > 0x0F ? 0x10 : 0) + (result & 0x0F);
 	} else {
 		result = (_state.A & 0xFF) + value + (_state.PS & ProcFlags::Carry);
@@ -38,13 +42,19 @@ void SnesCpu::Add16(uint16_t value)
 	if(CheckFlag(ProcFlags::Decimal)) {
 		result = (_state.A & 0x0F) + (value & 0x0F) + (_state.PS & ProcFlags::Carry);
 
-		if(result > 0x09) result += 0x06;
+		if(result > 0x09) {
+			result += 0x06;
+		}
 		result = (_state.A & 0xF0) + (value & 0xF0) + (result > 0x0F ? 0x10 : 0) + (result & 0x0F);
 
-		if(result > 0x9F) result += 0x60;
+		if(result > 0x9F) {
+			result += 0x60;
+		}
 		result = (_state.A & 0xF00) + (value & 0xF00) + (result > 0xFF ? 0x100 : 0) + (result & 0xFF);
 
-		if(result > 0x9FF) result += 0x600;
+		if(result > 0x9FF) {
+			result += 0x600;
+		}
 		result = (_state.A & 0xF000) + (value & 0xF000) + (result > 0xFFF ? 0x1000 : 0) + (result & 0xFFF);
 	} else {
 		result = _state.A + value + (_state.PS & ProcFlags::Carry);
@@ -84,7 +94,9 @@ void SnesCpu::Sub8(uint8_t value)
 	int32_t result;
 	if(CheckFlag(ProcFlags::Decimal)) {
 		result = (_state.A & 0x0F) + (value & 0x0F) + (_state.PS & ProcFlags::Carry);
-		if(result <= 0x0F) result -= 0x06;
+		if(result <= 0x0F) {
+			result -= 0x06;
+		}
 		result = (_state.A & 0xF0) + (value & 0xF0) + (result > 0x0F ? 0x10 : 0) + (result & 0x0F);
 	} else {
 		result = (_state.A & 0xFF) + value + (_state.PS & ProcFlags::Carry);
@@ -116,13 +128,19 @@ void SnesCpu::Sub16(uint16_t value)
 	if(CheckFlag(ProcFlags::Decimal)) {
 		result = (_state.A & 0x0F) + (value & 0x0F) + (_state.PS & ProcFlags::Carry);
 
-		if(result <= 0x0F) result -= 0x06;
+		if(result <= 0x0F) {
+			result -= 0x06;
+		}
 		result = (_state.A & 0xF0) + (value & 0xF0) + (result > 0x0F ? 0x10 : 0) + (result & 0x0F);
 
-		if(result <= 0xFF) result -= 0x60;
+		if(result <= 0xFF) {
+			result -= 0x60;
+		}
 		result = (_state.A & 0xF00) + (value & 0xF00) + (result > 0xFF ? 0x100 : 0) + (result & 0xFF);
 
-		if(result <= 0xFFF) result -= 0x600;
+		if(result <= 0xFFF) {
+			result -= 0x600;
+		}
 		result = (_state.A & 0xF000) + (value & 0xF000) + (result > 0xFFF ? 0x1000 : 0) + (result & 0xFFF);
 	} else {
 		result = _state.A + value + (_state.PS & ProcFlags::Carry);
@@ -1165,6 +1183,14 @@ void SnesCpu::WAI()
 	//Wait for interrupt
 	_state.StopState = SnesCpuStopState::WaitingForIrq;
 	_waiOver = false;
+
+#ifndef DUMMYCPU
+	#ifdef SA1
+	_emu->ProcessEvent(EventType::HaltStarted, CpuType::Sa1);
+	#else
+	_emu->ProcessEvent(EventType::HaltStarted, CpuType::Snes);
+	#endif
+#endif
 }
 
 /****************

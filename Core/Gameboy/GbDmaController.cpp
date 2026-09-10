@@ -63,13 +63,11 @@ bool GbDmaController::IsOamDmaConflict(uint16_t addr)
 		return (
 			(src < 0x80 && addr < 0x8000) ||
 			(src >= 0x80 && src <= 0x9F && addr >= 0x8000 && addr <= 0x9FFF) ||
-			(src >= 0xA0 && src <= 0xFD && addr >= 0xA000 && addr <= 0xFDFF)
-		);
+			(src >= 0xA0 && src <= 0xFD && addr >= 0xA000 && addr <= 0xFDFF));
 	} else {
 		return (
 			((src < 0x80 || (src >= 0xA0 && src <= 0xFD)) && (addr < 0x8000 || (addr >= 0xA000 && addr <= 0xFDFF))) ||
-			(src >= 0x80 && src <= 0x9F && addr >= 0x8000 && addr <= 0x9FFF)
-		);
+			(src >= 0x80 && src <= 0x9F && addr >= 0x8000 && addr <= 0x9FFF));
 	}
 }
 
@@ -163,17 +161,19 @@ void GbDmaController::ProcessHdma()
 	_state.CgbHdmaTrigger = trigger;
 
 	if(_state.CgbHdmaPending && !_cpu->IsHalted()) {
+		// prevent DMA blocks from being processed again when an hblank transfer crosses a scanline boundary
+		// fixes hangs and grapics corruption in "Championship Motocross 2001 featuring Ricky Carmichael"
+		_state.CgbHdmaPending = false;
 		//4 cycles for setup
 		_memoryManager->Exec();
 		_memoryManager->Exec();
 		ProcessDmaBlock();
-		_state.CgbHdmaPending = false;
 	}
 }
 
 void GbDmaController::ProcessDmaBlock()
 {
-	bool isInvalidSource = _state.CgbDmaSource >= 0x8000 && _state.CgbDmaSource <= 0x9FFF || _state.CgbDmaSource >= 0xE000;
+	bool isInvalidSource = (_state.CgbDmaSource >= 0x8000 && _state.CgbDmaSource <= 0x9FFF) || _state.CgbDmaSource >= 0xE000;
 	for(int i = 0; i < 16; i++) {
 		uint16_t dst = 0x8000 | ((_state.CgbDmaDest + i) & 0x1FFF);
 
@@ -201,8 +201,15 @@ void GbDmaController::ProcessDmaBlock()
 
 void GbDmaController::Serialize(Serializer& s)
 {
-	SV(_state.OamDmaSource); SV(_state.DmaStartDelay); SV(_state.InternalDest); SV(_state.DmaCounter); SV(_state.DmaReadBuffer);
-	SV(_state.CgbDmaDest); SV(_state.CgbDmaLength); SV(_state.CgbDmaSource); SV(_state.CgbHdmaRunning);
+	SV(_state.OamDmaSource);
+	SV(_state.DmaStartDelay);
+	SV(_state.InternalDest);
+	SV(_state.DmaCounter);
+	SV(_state.DmaReadBuffer);
+	SV(_state.CgbDmaDest);
+	SV(_state.CgbDmaLength);
+	SV(_state.CgbDmaSource);
+	SV(_state.CgbHdmaRunning);
 	SV(_state.CgbHdmaPending);
 	SV(_state.CgbHdmaTrigger);
 	SV(_state.OamDmaRunning);

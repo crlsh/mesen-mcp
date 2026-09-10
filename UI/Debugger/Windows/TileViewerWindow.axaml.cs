@@ -1,14 +1,14 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
-using System;
+using Mesen.Config;
 using Mesen.Debugger.Controls;
+using Mesen.Debugger.Utilities;
 using Mesen.Debugger.ViewModels;
 using Mesen.Interop;
+using System;
 using System.ComponentModel;
-using Avalonia.Interactivity;
-using Mesen.Debugger.Utilities;
-using Mesen.Config;
 
 namespace Mesen.Debugger.Windows
 {
@@ -22,9 +22,6 @@ namespace Mesen.Debugger.Windows
 		public TileViewerWindow(CpuType cpuType)
 		{
 			InitializeComponent();
-#if DEBUG
-			this.AttachDevTools();
-#endif
 
 			ScrollPictureViewer scrollViewer = this.GetControl<ScrollPictureViewer>("picViewer");
 			PictureViewer picViewer = scrollViewer.InnerViewer;

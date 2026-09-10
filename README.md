@@ -1,89 +1,53 @@
-Mesen2 (MCP-Enabled Fork)
+# Mesen Community Edition
 
-This repository is a personal fork of Mesen2, a multi-system emulator
-(NES, SNES, Game Boy, Game Boy Advance, PC Engine, SMS/Game Gear, WonderSwan)
-for Windows, Linux and macOS.
+Mesen is a multi-system emulator for Windows, Linux, and macOS. It supports NES, SNES, Game Boy (GB/SGB/GBC), Game Boy Advance, PC Engine, SMS/Game Gear, and WonderSwan (WS/WSC).
 
-This fork integrates a native MCP server directly into the emulator core
-to enable programmatic control without relying on external bridge scripts.
+This is a community-managed fork, created to maintain and expand this emulator into the future.
 
-This is not an official Mesen release.
+## Releases
 
-About This Fork
+The latest stable version is available from the [releases page on GitHub](https://github.com/nesdev-org/MesenCE/releases).
 
-This version replaces the previous external Python/Lua bridge with a
-native MCP server implementation inside the emulator core.
+## Development Builds
 
-Modified / Added components:
+[![Mesen](https://github.com/nesdev-org/MesenCE/actions/workflows/build.yml/badge.svg)](https://github.com/nesdev-org/MesenCE/actions/workflows/build.yml?query=branch%3Amaster)
 
-Core/Shared/McpServer.cpp
+* [Windows](https://nightly.link/nesdev-org/MesenCE/workflows/build/master/Mesen%20%28Windows%20-%20net10.0%20-%20AoT%29.zip)
+  * Windows 7 or higher is required. Windows 7 users must use SP1 and have all updates installed.
+* [Linux x64](https://nightly.link/nesdev-org/MesenCE/workflows/build/master/Mesen%20%28Linux%20-%20ubuntu-22.04%20-%20clang_aot%29.zip)  (requires **SDL2**)  
+* [Linux ARM64](https://nightly.link/nesdev-org/MesenCE/workflows/build/master/Mesen%20%28Linux%20-%20ubuntu-22.04-arm%20-%20clang_aot%29.zip)  (requires **SDL2**)  
+* [macOS - Intel](https://nightly.link/nesdev-org/MesenCE/workflows/build/master/Mesen%20%28macOS%20-%20macos-15-intel%20-%20clang_aot%29.zip)  (requires **SDL2**)  
+* [macOS - Apple Silicon](https://nightly.link/nesdev-org/MesenCE/workflows/build/master/Mesen%20%28macOS%20-%20macos-15%20-%20clang_aot%29.zip)  (requires **SDL2**)  
 
-Core/Shared/McpServer.h
+#### <ins>Notes</ins> ####
 
-The objective is to allow deterministic, direct programmatic control of the
-emulator from external tooling, including automation systems and LLM-driven workflows.
+* Other builds are also available in the [Actions](https://github.com/nesdev-org/MesenCE/actions/workflows/build.yml?query=branch%3Amaster) tab.
+* **macOS**: Builds are self-signed and will require approval via Gatekeeper before they are able to be run.  
+* **SteamOS**: See [SteamOS.md](SteamOS.md)  
 
-Requirements
-Windows
+## Compiling
 
-Visual Studio 2022
+See [COMPILING.md](COMPILING.md)
 
-MSVC v143 toolset
+## Contributing
 
-.NET 8 SDK
+See [CONTRIBUTING.md](CONTRIBUTING.md)
 
-x64 build tools
+## License
 
-Linux
+Mesen is available under the GPL V3 license.  Full text here: <http://www.gnu.org/licenses/gpl-3.0.en.html>
 
-Clang or GCC with C++17 support
+Copyright (C) 2014-2026 Sour, 2026 contributors
 
-SDL2
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-.NET 8 SDK
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
 
-macOS
-
-Clang with C++17 support
-
-SDL2
-
-.NET 8 SDK
-
-Build
-Windows
-dotnet restore Mesen.sln
-msbuild Mesen.sln /p:Configuration=Release /p:Platform=x64
-
-Linux / macOS
-make
-
-Continuous Integration
-
-This repository includes a minimal GitHub Actions workflow that validates
-that the solution builds successfully on a clean Windows environment.
-
-Only the latest push is built; previous runs are automatically canceled.
-
-Project Structure
-
-Core/ — Emulator core
-
-InteropDLL/ — Native interop layer
-
-UI/ — .NET-based user interface
-
-Core/Shared/McpServer.* — Native MCP server integration
-
-License
-
-This project is based on Mesen2 and remains licensed under the GPL v3.
-
-Original project copyright:
-Copyright (C) 2014–2025 Sour
-
-This fork maintains GPL compliance and distributes modifications
-under the same license terms.
-
-Full license text:
-http://www.gnu.org/licenses/gpl-3.0.en.html
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
