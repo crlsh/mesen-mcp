@@ -1,8 +1,41 @@
-# Mesen Community Edition
+# Mesen MCP
 
-Mesen is a multi-system emulator for Windows, Linux, and macOS. It supports NES, SNES, Game Boy (GB/SGB/GBC), Game Boy Advance, PC Engine, SMS/Game Gear, and WonderSwan (WS/WSC).
+Mesen MCP is an AI-augmented fork of Mesen (Multi-system emulator for Windows, Linux, and macOS supporting NES, SNES, GB/GBC/GBA, PC Engine, SMS/GG, and WonderSwan). 
 
-This is a community-managed fork, created to maintain and expand this emulator into the future.
+It embeds a native, multi-threaded Model Context Protocol (MCP) TCP Server directly into the core emulation engine, enabling Large Language Models (like Claude via Claude Desktop or Cursor) to programmatically inspect memory, execute game inputs, control emulation speed, set hardware breakpoints, and automate reverse engineering tasks in real time.
+
+## Key Features & Built-in MCP Tools
+
+The native MCP server accepts JSON-RPC over TCP/stdio with thread-safe dual-path execution (core thread + direct TCP thread queries).
+
+### 1. Emulation & Flow Control
+* `load_rom`: Load and initialize any compatible ROM file.
+* `run` / `pause` / `reset`: Control the emulator state without losing debug context.
+* `set_speed`: Change emulation speed from `0%` (unlocked maximum speed) up to `5000%`.
+* `get_state`: Query emulator status (`idle`, `loading`, `running`, `paused`, `error`), Program Counter (PC), and current frame counter.
+
+### 2. Frame Step & Input Automation
+* `step_frame`: Advance emulation by an exact number of frames (1 to 3600).
+* `set_input`: Inject button presses via bitmask (D-Pad, A, B, Select, Start) with a persistent Sticky Input mechanism that survives frame polling cycles.
+
+### 3. Memory Read / Write (RAM & VRAM)
+* `read_memory`: Read memory buffers up to 2048 bytes across various memory spaces:
+  * CPU Memory (`NesMemory`, `cpu`)
+  * PPU / Video Memory (`ppuMemory`, `nametableRam`, `paletteRam`, `spriteRam`/OAM, `chrRam`)
+* `write_memory`: Directly write byte values (0–255) into RAM for testing, cheat creation, and dynamic state modifications.
+
+### 4. Advanced CPU Debugging & Disassembly
+* `set_breakpoints`: Set conditional breakpoints by type: Read (`1`), Write (`2`), or Execute (`4`).
+* `step_instruction`: Step through execution by exact CPU instruction count.
+* `continue`: Resume execution until the next breakpoint hit.
+* `get_cpu_state`: Full register dump (NES: `A`, `X`, `Y`, `PC`, `SP`, `PS`, cycles, and boolean flags `C`, `Z`, `I`, `D`, `V`, `N`).
+* `get_trace`: Fetch recent execution traces with disassembled instructions and raw bytecode.
+* `get_callstack`: Inspect call stacks, subroutines, return addresses, and `NMI`/`IRQ` interrupts.
+
+### 5. AI-Assisted Reverse Engineering Tools
+* `scan_variables_internal`: Automated RAM variable search. Performs multi-trial input injections and calculates deltas across the entire internal RAM to find candidate addresses (e.g., player position, lives, score) categorized by stability.
+* `set_write_log` / `get_write_log`: Ring-buffered memory write logger tracking exact CPU cycles, target addresses, written values, and the PC responsible for the write.
+
 
 ## Releases
 
